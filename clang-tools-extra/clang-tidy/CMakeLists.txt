@@ -67,6 +67,8 @@ add_subdirectory(llvm)
 add_subdirectory(llvmlibc)
 add_subdirectory(misc)
 add_subdirectory(modernize)
+add_subdirectory(jsn)
+
 if(CLANG_TIDY_ENABLE_STATIC_ANALYZER)
   add_subdirectory(mpi)
 endif()
@@ -100,6 +102,7 @@ set(ALL_CLANG_TIDY_CHECKS
   clangTidyPortabilityModule
   clangTidyReadabilityModule
   clangTidyZirconModule
+  clangTidyJsnModule
   )
 if(CLANG_TIDY_ENABLE_STATIC_ANALYZER)
   list(APPEND ALL_CLANG_TIDY_CHECKS clangTidyMPIModule)
