@@ -6,13 +6,18 @@
 //
 //===----------------------------------------------------------------------===//
 // #include "clang/Tooling/CommonOptionsParser.h"
+
+#include "../ClassWrapper.h"
+
 #include "llvm/ADT/StringRef.h"
+#include "clang/Tooling/JSONCompilationDatabase.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Signals.h"
-#include "llvm/Support/WithColor.h"
+//#include "llvm/Support/WithColor.h"
+
 #include <format>
-// using namespace clang;
-// using namespace clang::tooling;
+using namespace clang;
+using namespace clang::tooling;
 using namespace llvm;
 
 class PairParser : public llvm::cl::parser<std::pair<std::string, std::string>> {
@@ -47,7 +52,7 @@ cl::list<std::string> InputFilename(cl::Positional, cl::ZeroOrMore, cl::desc("<i
                                     cl::cat(ClassWrapperCategory));
 
 cl::list<std::pair<std::string, std::string>, bool, PairParser>
-    CompilationDatabase(
+    OptCompilationDatabase(
         "p",
         cl::desc("compilation databases of one or more targets <compilation "
                  "database1> [compilation database2...]"),
@@ -59,6 +64,18 @@ cl::opt<std::string> OutputDir("o", cl::desc("output dictionary"),
                                cl::Required,
                                cl::cat(ClassWrapperCategory));
 
+// We need SourceRoot to distinguish user symbol declarations and system
+// declarations.
+cl::opt<std::string> SourceRoot("r", cl::desc("user sources root"),
+                                cl::value_desc("src_root"), cl::Required,
+                                cl::cat(ClassWrapperCategory));
+
+cl::list<std::string> NonWrappedFiles(
+    "e",
+    cl::desc(
+        "function/type declarations in specific files will not be wrapped"),
+    cl::value_desc("exclude_files"), cl::ZeroOrMore,
+    cl::cat(ClassWrapperCategory));
 
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
@@ -71,9 +88,19 @@ int main(int argc, const char **argv) {
     llvm::outs() << Filename << " ";
   }
   llvm::outs() << "\n\nCompilation Databases: \n";
-  for (const auto & [Target, Database]: CompilationDatabase) {
-    llvm::outs() << std::format("{}:{}\n", Target, Database);
+
+  for (const auto & [Target, DatabasePath]: OptCompilationDatabase) {
+    llvm::outs() << std::format("{}:{}\n", Target, DatabasePath);
+    std::string ErrorMessage;
+        auto Database = JSONCompilationDatabase::loadFromFile(
+        DatabasePath, ErrorMessage, JSONCommandLineSyntax::AutoDetect);
+        if (!Database) {
+          llvm::errs() << ErrorMessage << "\n";
+          return 1;
+        }
   }
+
+
 
   return 0;
 }
