@@ -137,6 +137,11 @@ extern volatile int ZirconModuleAnchorSource;
 static int LLVM_ATTRIBUTE_UNUSED ZirconModuleAnchorDestination =
     ZirconModuleAnchorSource;
 
+// This anchor is used to force the linker to link the JsnModule.
+extern volatile int JsnModuleAnchorSource;
+static int LLVM_ATTRIBUTE_UNUSED JsnModuleAnchorSourceDestination =
+    JsnModuleAnchorSource;
+
 } // namespace clang::tidy
 
 #endif
