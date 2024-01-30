@@ -1857,8 +1857,7 @@ std::vector<const CXXRecordDecl *> findRecordTypeAt(ParsedAST &AST,
 
       if (const VarDecl *VD = dyn_cast<VarDecl>(D)) {
         // If this is a variable, use the type of the variable.
-        if (const auto *RD = VD->getType().getTypePtr()->getAsCXXRecordDecl())
-          Records.push_back(RD);
+        Records.push_back(VD->getType().getTypePtr()->getAsCXXRecordDecl());
         continue;
       }
 

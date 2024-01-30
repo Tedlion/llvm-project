@@ -16,8 +16,7 @@
 #include "mlir/ExecutionEngine/Msan.h"
 
 #ifndef _WIN32
-#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || \
-    defined(__DragonFly__)
+#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
 #include <cstdlib>
 #else
 #include <alloca.h>

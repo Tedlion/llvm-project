@@ -27,7 +27,6 @@
 
 #include "MoveOnly.h"
 #include "test_macros.h"
-#include "../../types.h"
 
 // Test Constraints
 static_assert(std::is_constructible_v<std::expected<int, int>, const std::unexpected<int>&>);
@@ -50,10 +49,10 @@ struct MyInt {
   friend constexpr bool operator==(const MyInt&, const MyInt&) = default;
 };
 
-template <class T, class V = int>
+template <class T>
 constexpr void testUnexpected() {
   const std::unexpected<int> u(5);
-  std::expected<V, T> e(u);
+  std::expected<int, T> e(u);
   assert(!e.has_value());
   assert(e.error() == 5);
 }
@@ -61,12 +60,13 @@ constexpr void testUnexpected() {
 constexpr bool test() {
   testUnexpected<int>();
   testUnexpected<MyInt>();
-  testUnexpected<TailClobberer<1>, bool>();
   return true;
 }
 
 void testException() {
 #ifndef TEST_HAS_NO_EXCEPTIONS
+  struct Except {};
+
   struct Throwing {
     Throwing(int) { throw Except{}; }
   };

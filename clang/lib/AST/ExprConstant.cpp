@@ -2379,15 +2379,10 @@ static bool CheckEvaluationResult(CheckEvaluationResultKind CERK,
                                   const FieldDecl *SubobjectDecl,
                                   CheckedTemporaries &CheckedTemps) {
   if (!Value.hasValue()) {
-    if (SubobjectDecl) {
-      Info.FFDiag(DiagLoc, diag::note_constexpr_uninitialized)
-          << /*(name)*/ 1 << SubobjectDecl;
-      Info.Note(SubobjectDecl->getLocation(),
-                diag::note_constexpr_subobject_declared_here);
-    } else {
-      Info.FFDiag(DiagLoc, diag::note_constexpr_uninitialized)
-          << /*of type*/ 0 << Type;
-    }
+    assert(SubobjectDecl && "SubobjectDecl shall be non-null");
+    Info.FFDiag(DiagLoc, diag::note_constexpr_uninitialized) << SubobjectDecl;
+    Info.Note(SubobjectDecl->getLocation(),
+              diag::note_constexpr_subobject_declared_here);
     return false;
   }
 
