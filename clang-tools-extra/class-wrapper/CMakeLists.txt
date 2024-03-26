@@ -1,3 +1,5 @@
+set(CMAKE_CXX_STANDARD 23)
+
 set(LLVM_LINK_COMPONENTS
         support
         FrontendOpenMP

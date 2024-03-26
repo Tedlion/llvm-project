@@ -5,27 +5,74 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-#include "clang/Tooling/CommonOptionsParser.h"
+// #include "clang/Tooling/CommonOptionsParser.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/WithColor.h"
-
-using namespace clang;
-using namespace clang::tooling;
+#include <format>
+// using namespace clang;
+// using namespace clang::tooling;
 using namespace llvm;
 
-static cl::OptionCategory ClangQueryCategory("class wrapper options");
+class PairParser : public llvm::cl::parser<std::pair<std::string, std::string>> {
+public:
+  using llvm::cl::parser<std::pair<std::string, std::string>>::parser;
+
+  bool parse(llvm::cl::Option &O, llvm::StringRef ArgName,
+             llvm::StringRef ArgValue, std::pair<std::string, std::string> &Val) {
+    size_t EqualsPos = ArgValue.find('=');
+    if (EqualsPos == llvm::StringRef::npos) {
+      return O.error("Expected '=' in argument");
+    }
+
+    Val.first = ArgValue.substr(0, EqualsPos).str();
+    Val.second = ArgValue.substr(EqualsPos + 1).str();
+    return false;
+  }
+
+  // FIXME: Option help info require override implementation of the following functions
+
+//  size_t getOptionWidth(const cl::Option &O) const override {
+//    ;
+//  }
+//
+//  void printOptionInfo(const cl::Option &O, size_t GlobalWidth) const override {
+//
+//  }
+};
+
+static cl::OptionCategory ClassWrapperCategory("Class Wrapper Options");
+cl::list<std::string> InputFilename(cl::Positional, cl::ZeroOrMore, cl::desc("<input files>"),
+                                    cl::cat(ClassWrapperCategory));
+
+cl::list<std::pair<std::string, std::string>, bool, PairParser>
+    CompilationDatabase(
+        "p",
+        cl::desc("compilation databases of one or more targets <compilation "
+                 "database1> [compilation database2...]"),
+        cl::value_desc("target:database"), cl::OneOrMore, cl::Required,
+        cl::CommaSeparated, cl::cat(ClassWrapperCategory));
+
+cl::opt<std::string> OutputDir("o", cl::desc("output dictionary"),
+                               cl::value_desc("out_dir"),
+                               cl::Required,
+                               cl::cat(ClassWrapperCategory));
 
 
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
-  llvm::Expected<CommonOptionsParser> OptionsParser =
-      CommonOptionsParser::create(argc, argv, ClangQueryCategory,
-                                  llvm::cl::OneOrMore);
-
-  if (!OptionsParser) {
-    llvm::WithColor::error() << llvm::toString(OptionsParser.takeError());
+  if (!cl::ParseCommandLineOptions(argc, argv)) {
     return 1;
+  }
+
+  llvm::outs() << "Input files: ";
+  for (const auto & Filename: InputFilename) {
+    llvm::outs() << Filename << " ";
+  }
+  llvm::outs() << "\n\nCompilation Databases: \n";
+  for (const auto & [Target, Database]: CompilationDatabase) {
+    llvm::outs() << std::format("{}:{}\n", Target, Database);
   }
 
   return 0;
