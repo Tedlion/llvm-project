@@ -7,7 +7,7 @@ Class Wrapper is designed to be an independent tool to wrap all code of a build 
 ### Scanning Once
 Find all TypeDecl, FunctionDecl, and VarDecl.
 
-One map for each target, record (**name**(as key), src_location, hash) 
+One map for each target, record (**name**(as key), src_location(for replacement), hash(to check consistency)) 
 
 Decide the namespace for each TypeDecl.
 
@@ -58,3 +58,59 @@ If a variable/function is completely same among all module types, make it in bas
 If a function's declaration is same among all module types, make it **pure** and **virtual** in base class.
 
 How to judge the same?
+
+## Preview
+### Structure
+```cpp
+namespace test_plat{
+struct common_type{
+    ...
+};
+
+class DUT{
+    void common_func(common_type arg);
+    
+    virtual func_same_inf_differnet_impl(common_type arg) = 0;
+};
+
+namespace cco{
+struct type1{
+    ...
+};
+
+struct type2 {
+    ...
+};
+    class CCO : public DUT{
+        void func_same_inf_differnet_impl(common_type arg) override;
+    
+        void func1(type1 arg);
+        
+        void func2(type2 arg);
+    };
+};  // namespace cco
+
+namespace sta{
+struct type1{
+    ...
+};
+
+struct type3 {
+    ...
+};
+
+    class STA : public DUT{
+        void func_same_inf_differnet_impl(common_type arg) override;
+    
+        void func1(type1 arg);
+        
+        void func3(type3 arg);
+    };
+};  // namespace sta
+
+};  // namespace test_plat
+```
+
+## TODO Lists:
+- [ ] accepting multiple compilation database argument in command line
+- 
