@@ -8,9 +8,10 @@
 // #include "clang/Tooling/CommonOptionsParser.h"
 
 #include "../ClassWrapper.h"
+#include "../FileFilter.h"
 
-#include "llvm/ADT/StringRef.h"
 #include "clang/Tooling/JSONCompilationDatabase.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Signals.h"
 //#include "llvm/Support/WithColor.h"
@@ -48,45 +49,57 @@ public:
 };
 
 static cl::OptionCategory ClassWrapperCategory("Class Wrapper Options");
-cl::list<std::string> InputFilename(cl::Positional, cl::ZeroOrMore, cl::desc("<input files>"),
+
+// We need SourceRoot to distinguish user symbol declarations and system
+// declarations.
+cl::opt<std::string> SourceRoot(cl::Positional, cl::Required,
+                                cl::value_desc("User sources root"),
+                                cl::desc("<src root>"),
+                                cl::cat(ClassWrapperCategory));
+
+cl::list<std::string> FilenameFilters("f", cl::ZeroOrMore, cl::CommaSeparated, cl::value_desc("files_filters"),
+                                     cl::desc("File filter rules.\n"
+                                               "Multiple file paths with wildcard characters are accepted.\n"
+                                               "File paths may be absolute or relative to the source root.\n"
+                                               "If a file path starts with '-', matched files will be excluded.\n"
+                                               "The behind rules override the front ones."),
                                     cl::cat(ClassWrapperCategory));
 
 cl::list<std::pair<std::string, std::string>, bool, PairParser>
     OptCompilationDatabase(
         "p",
-        cl::desc("compilation databases of one or more targets <compilation "
-                 "database1> [compilation database2...]"),
+        cl::desc("Compilation databases of one or more targets.\n"
+                 "e.g. <target1=database1> [target2=database2...]"),
         cl::value_desc("target:database"), cl::OneOrMore, cl::Required,
         cl::CommaSeparated, cl::cat(ClassWrapperCategory));
 
-cl::opt<std::string> OutputDir("o", cl::desc("output dictionary"),
+cl::opt<std::string> OutputDir("o", cl::desc("Output dictionary"),
                                cl::value_desc("out_dir"),
                                cl::Required,
                                cl::cat(ClassWrapperCategory));
 
-// We need SourceRoot to distinguish user symbol declarations and system
-// declarations.
-cl::opt<std::string> SourceRoot("r", cl::desc("user sources root"),
-                                cl::value_desc("src_root"), cl::Required,
-                                cl::cat(ClassWrapperCategory));
-
 cl::list<std::string> NonWrappedFiles(
-    "e",
+    "non-wrapped",
     cl::desc(
-        "function/type declarations in specific files will not be wrapped"),
+        "Function/type declarations in given files will not be wrapped"),
     cl::value_desc("exclude_files"), cl::ZeroOrMore,
     cl::cat(ClassWrapperCategory));
 
 int main(int argc, const char **argv) {
   llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
+  cl::HideUnrelatedOptions(ClassWrapperCategory);
+
   if (!cl::ParseCommandLineOptions(argc, argv)) {
     return 1;
   }
 
-  llvm::outs() << "Input files: ";
-  for (const auto & Filename: InputFilename) {
-    llvm::outs() << Filename << " ";
-  }
+  FileFilter SrcFilter(FilenameFilters.begin(), FilenameFilters.end(),
+                       SourceRoot);
+
+//  llvm::outs() << "Input files: ";
+//  for (const auto & Filename: InputFilename) {
+//    llvm::outs() << Filename << " ";
+//  }
   llvm::outs() << "\n\nCompilation Databases: \n";
 
   for (const auto & [Target, DatabasePath]: OptCompilationDatabase) {
@@ -98,6 +111,14 @@ int main(int argc, const char **argv) {
           llvm::errs() << ErrorMessage << "\n";
           return 1;
         }
+
+    for(auto Filepath: Database->getAllFiles()) {
+      if (SrcFilter.isMatched(Filepath)) {
+        llvm::outs() << Filepath << "\n";
+      }
+    }
+
+    llvm::outs() << "\n";
   }
 
 
