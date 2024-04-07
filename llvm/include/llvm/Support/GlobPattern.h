@@ -70,7 +70,7 @@ public:
   }
 
 private:
-  StringRef Prefix;
+  std::string Prefix;
 
   struct SubGlobPattern {
     /// \param Pat the pattern to match against
