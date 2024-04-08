@@ -60,6 +60,15 @@ Replace macros which define/declare global symbols.
 
 Leave others unchanged for readability.
 
+### Conflicting Symbols:
+- Treat all type and non-static symbol conflicting as error.
+- Record all static symbol usages. If a conflict is found later, declarations and usages need to be renamed.
+- Record all function ptrs usages. They need to be replaced with member functions. 
+
+
+### Function Ptrs:
+
+
 ### Replacements to apply:
 #### Generate New Headers:
 - DutIn.h

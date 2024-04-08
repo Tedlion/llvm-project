@@ -2,7 +2,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/..)
 
 add_clang_tool(class-wrapper
         ClassWrapperMain.cpp
-        ../ClassWrapper.cpp
+        ../DeclScanner.cpp
         ../FileFilter.cpp
 )
 
