@@ -14,6 +14,7 @@
 #include <vector>
 
 namespace llvm {
+extern std::string pathNormalize(const std::string &Path);
 
 class FileFilter {
 public:

@@ -7,6 +7,8 @@
 #ifndef CLASSWRAPPERCONTEXT_H
 #define CLASSWRAPPERCONTEXT_H
 
+#include "FileFilter.h"
+
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/Specifiers.h"
 #include "clang/Tooling/Core/Replacement.h"
@@ -15,6 +17,8 @@
 
 #include <map>
 #include <set>
+
+
 namespace clang::class_wrapper {
 
 using llvm::StringRef;
@@ -53,10 +57,31 @@ struct SymbolInfoValue{
 };
 
 struct ClassWrapperContext {
-  StringMap<std::map<SymbolInfoKey, SmallVector<SymbolInfoValue, 4>>> DeclSymbols;
+  const std::string SourceRoot;
+  const llvm::FileFilter &SrcFilter;
+  const llvm::FileFilter &NonWrappedFilter;
+
+  StringMap<std::map<SymbolInfoKey, SmallVector<SymbolInfoValue, 4>>>
+      DeclSymbols;
   StringSet<> UsedSymbolName;
 
   Replacements Replaces;
+
+  ClassWrapperContext(const std::string & SourceRoot, const llvm::FileFilter &SrcFilter,
+                      const llvm::FileFilter &NonWrappedFilter)
+      : SourceRoot(llvm::pathNormalize(SourceRoot)), SrcFilter(SrcFilter),
+        NonWrappedFilter(NonWrappedFilter) {}
+
+  bool needToWrap(StringRef FilePath) const {
+    std::string NormalFilePath = llvm::pathNormalize(FilePath.str());
+
+    if (NormalFilePath.find(SourceRoot) != 0){
+      return false;
+    }
+
+    return !NonWrappedFilter.isMatched(NormalFilePath);
+  }
+
 };
 }; // namespace clang::class_wrapper
 
