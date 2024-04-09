@@ -89,7 +89,7 @@ cl::list<std::string> NonWrappedFiles(
     cl::desc("Function/type declarations in given files will not be wrapped.\n"
              "Differently from -f, non-wrapped files will be copied unchanged "
              "instead of being ignored."),
-    cl::value_desc("exclude_files"), cl::ZeroOrMore,
+    cl::value_desc("exclude_files"), cl::ZeroOrMore, cl::CommaSeparated,
     cl::cat(ClassWrapperCategory));
 
 cl::list<std::string>
@@ -111,7 +111,7 @@ int main(int argc, const char **argv) {
                        SourceRoot);
   FileFilter NonWrappedFilter(NonWrappedFiles.begin(), NonWrappedFiles.end(),
                               SourceRoot);
-  ClassWrapperContext Context;
+  ClassWrapperContext Context(SourceRoot, SrcFilter, NonWrappedFilter);
   llvm::outs() << "\n\nCompilation Databases: \n";
 
   for (const auto &[Target, DatabasePath] : OptCompilationDatabase) {
@@ -129,7 +129,6 @@ int main(int argc, const char **argv) {
     }
 
     std::vector<std::string> ScanningFiles;
-    runDeclScanner(*Database, ScanningFiles, Context);
 
     for (auto Filepath : Database->getAllFiles()) {
       if (SrcFilter.isMatched(Filepath) &&
@@ -139,6 +138,7 @@ int main(int argc, const char **argv) {
       }
     }
 
+    runDeclScanner(*Database, ScanningFiles, Context);
     llvm::outs() << "\n";
   }
 
