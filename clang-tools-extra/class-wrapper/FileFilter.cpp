@@ -12,6 +12,10 @@
 #include <filesystem>
 
 namespace llvm {
+std::string pathNormalize(const std::string &Path) {
+  return std::filesystem::path(Path).lexically_normal().generic_string();
+}
+
 FileFilter::FileFilter(std::vector<std::string>::const_iterator FilesBegin,
                        std::vector<std::string>::const_iterator FilesEnd,
                        StringRef SrcRoot) {
@@ -60,8 +64,7 @@ bool FileFilter::isMatched(llvm::StringRef Path) const {
     if (!IsMatched && matchType == Exclusive) {
       continue;
     }
-    auto NormalPath =
-        std::filesystem::path(Path.str()).lexically_normal().generic_string();
+    auto NormalPath = pathNormalize(Path.str());
 
     if (pattern.match(NormalPath)){
       IsMatched = !IsMatched;
