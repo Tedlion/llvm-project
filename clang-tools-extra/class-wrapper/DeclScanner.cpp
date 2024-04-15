@@ -33,6 +33,10 @@ auto DeclStmtMatcher =
 constexpr const char DeclRefExprStr[] = "declRefExpr";
 auto DeclRefExprMatcher = traverse(TK_IgnoreUnlessSpelledInSource,
                                    declRefExpr().bind(DeclRefExprStr));
+template<typename NodeType>
+concept PrettyDumpNode = requires(const NodeType &Node, const ASTContext& Context) {
+  Node.dumpPretty(Context);
+};
 
 template <typename MatcherHandler, typename NodeType, auto bindName>
 class ScannerMatcherHandler : public MatchFinder::MatchCallback {
@@ -57,7 +61,9 @@ public:
   // For temp usage
   void debugDump(const MatchFinder::MatchResult &Result, const NodeType &Node) {
     Node.dumpColor();
-    //    Node.dumpPretty(*Result.Context);
+    if constexpr (PrettyDumpNode<NodeType>) {
+      Node.dumpPretty(*Result.Context);
+    }
   }
 
   ClassWrapperContext &Context;
