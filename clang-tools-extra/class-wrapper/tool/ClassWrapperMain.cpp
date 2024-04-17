@@ -111,7 +111,9 @@ int main(int argc, const char **argv) {
                        SourceRoot);
   FileFilter NonWrappedFilter(NonWrappedFiles.begin(), NonWrappedFiles.end(),
                               SourceRoot);
-  ClassWrapperContext Context(SourceRoot, SrcFilter, NonWrappedFilter);
+  IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS = llvm::vfs::getRealFileSystem();
+  IntrusiveRefCntPtr<FileManager> Files = new FileManager(FileSystemOptions(), FS);
+  ClassWrapperContext Context(SourceRoot, SrcFilter, NonWrappedFilter, FS, Files);
   llvm::outs() << "\n\nCompilation Databases: \n";
 
   for (const auto &[Target, DatabasePath] : OptCompilationDatabase) {
@@ -138,6 +140,7 @@ int main(int argc, const char **argv) {
       }
     }
 
+    Context.setScanningTarget(Target);
     runDeclScanner(*Database, ScanningFiles, Context);
     llvm::outs() << "\n";
   }
