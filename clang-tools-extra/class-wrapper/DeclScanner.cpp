@@ -5,6 +5,7 @@
  */
 
 #include "DeclScanner.h"
+#include "clang/AST/ODRHash.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Tooling/Tooling.h"
@@ -118,9 +119,32 @@ public:
   using ScannerMatcherHandler::ScannerMatcherHandler;
 
   void run(const MatchFinder::MatchResult &Result, const FunctionDecl &FD) {
-    // TODO
+    unsigned ODRHash = getDeclHash(FD);
+//    llvm::errs() << std::format("{}:0x{:x}\n", FD.getType().getAsString(), ODRHash);
+    std::optional<unsigned> ImplHash = std::nullopt;
+    if (FD.hasBody()){
+      Stmt * Body = FD.getBody();
+      class ODRHash Hash;
+      Hash.AddStmt(Body);
+      ImplHash = Hash.CalculateHash();
+//        llvm::errs() << std::format("BodyHash :0x{:x}\n", ImplHash.value());
+    }
+
+    Context.recordSymbol(FD.getName(), FD.getSourceRange(), FD.getKind(),
+                         FD.getStorageClass(), ODRHash, ImplHash,
+                         FD.isInlineSpecified(), false);
+  }
+
+  static unsigned getDeclHash(const FunctionDecl &FD) {
+    class ODRHash Hash;
+    QualType DeclType = FD.getType();  // return type & param types
+    Hash.AddQualType(DeclType);
+    Hash.AddBoolean(FD.isStatic());
+    return Hash.CalculateHash();
   }
 };
+
+
 
 class DeclStmtHandler
     : public ScannerMatcherHandler<DeclStmtHandler, DeclStmt, DeclStmtStr> {
@@ -145,7 +169,9 @@ public:
 void runDeclScanner(const CompilationDatabase &Compilations,
                     const llvm::ArrayRef<std::string> SourcePaths,
                     ClassWrapperContext &Context) {
-  ClangTool Tool(Compilations, SourcePaths);
+  ClangTool Tool(Compilations, SourcePaths,
+                 std::make_shared<PCHContainerOperations>(),
+                 Context.getBaseFS(), Context.getFiles());
   MatchFinder Finder;
   TypedefDeclHandler TypedefDeclHandler(Context);
   RecordDeclHandler RecordDeclHandler(Context);

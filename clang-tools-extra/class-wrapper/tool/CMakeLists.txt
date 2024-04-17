@@ -4,6 +4,7 @@ add_clang_tool(class-wrapper
         ClassWrapperMain.cpp
         ../DeclScanner.cpp
         ../FileFilter.cpp
+        ../ClassWrapperContext.cpp
 )
 
 clang_target_link_libraries(class-wrapper
