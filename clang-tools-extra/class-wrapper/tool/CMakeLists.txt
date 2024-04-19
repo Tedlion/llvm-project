@@ -16,6 +16,7 @@ clang_target_link_libraries(class-wrapper
         clangFrontend
         clangSerialization
         clangTooling
+        clangTransformer
 )
 
 #target_link_libraries(clang-query
