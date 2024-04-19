@@ -293,7 +293,8 @@ getEntityEndLoc(const SourceManager &SM, SourceLocation EntityLast,
 // There are cases where we have more than one possible terminator (for example,
 // we find either a comma or a semicolon after a VarDecl).
 static std::set<tok::TokenKind> getTerminators(const Decl &D) {
-  if (llvm::isa<RecordDecl>(D) || llvm::isa<UsingDecl>(D))
+  if (llvm::isa<RecordDecl>(D) || llvm::isa<UsingDecl>(D) ||
+      llvm::isa<TypedefDecl>(D))
     return {tok::semi};
 
   if (llvm::isa<FunctionDecl>(D) || llvm::isa<LinkageSpecDecl>(D))
