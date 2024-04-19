@@ -35,7 +35,7 @@ using tooling::Replacements;
 // To decide replacement:
 // To apply replacement: vectors?
 
-
+#if 0
 struct SymbolInfoKey {
   StringRef FileName;
   unsigned BeginOffset;
@@ -44,8 +44,9 @@ struct SymbolInfoKey {
 
   auto operator<=>(const SymbolInfoKey &) const = default;
 };
+#endif
 
-struct SymbolInfoValue{
+struct SymbolInfo {
   StringRef Target;
 
   // Attributes from AST
@@ -62,7 +63,6 @@ struct SymbolInfoValue{
 
   // Decision made
   std::string NewName; // use old name if empty
-
 };
 
 class ClassWrapperContext {
@@ -94,7 +94,7 @@ public:
 
   void setScanningTarget(StringRef Target) { ScanningTarget = Target; }
 
-  void recordSymbol(StringRef Name, SourceRange Range, Decl::Kind Kind,
+  void recordSymbol(StringRef Name, CharSourceRange Range, Decl::Kind Kind,
                     StorageClass Storage,
                     unsigned DeclTypeHash, std::optional<unsigned> ImplHash,
                     bool IsInline = false,
@@ -106,7 +106,16 @@ public:
 private:
   StringRef ScanningTarget;
 
-  StringMap<std::map<SymbolInfoKey, SmallVector<SymbolInfoValue, 4>>>
+  struct CharSourceRangeComparator {
+    bool operator() (const CharSourceRange& Lhs, const CharSourceRange& Rhs) const {
+      return Lhs.getBegin() == Rhs.getBegin()
+                 ? Lhs.getEnd() < Rhs.getEnd()
+          : Lhs.getBegin() < Rhs.getBegin();
+    }
+  };
+
+  StringMap<
+      std::map<CharSourceRange, SmallVector<SymbolInfo, 4>, CharSourceRangeComparator>>
       DeclSymbols;
   StringSet<> UsedSymbolName;
 
