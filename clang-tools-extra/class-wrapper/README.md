@@ -164,3 +164,4 @@ How to judge the same?
 ## TODO Lists:
 - [x] Accept multiple compilation database argument in command line
 - [ ] Scan files for each database, record all declarations
+- [ ] Design hash algorithm for RecordDecl to make the hash values equal if and only if when the struct layout is totally same

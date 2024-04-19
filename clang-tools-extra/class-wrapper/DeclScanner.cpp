@@ -8,10 +8,17 @@
 #include "clang/AST/ODRHash.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
+#include "clang/Lex/Lexer.h"
 #include "clang/Tooling/Tooling.h"
+#include "clang/Tooling/Transformer/SourceCode.h"
 
 namespace clang::class_wrapper {
 using namespace clang::ast_matchers;
+
+//SourceRange getFullRange(const ASTContext &Context, const SourceRange &Range) {
+//  SourceLocation AfterEnd = clang::Lexer::getLocForEndOfToken(Range.getEnd(), 0, Context.getSourceManager(), Context.getLangOpts());
+//  return {Range.getBegin(), AfterEnd};
+//}
 
 constexpr const char TypedefDeclStr[] = "typedefDecl";
 auto TypedefDeclMatcher = traverse(TK_IgnoreUnlessSpelledInSource,
@@ -34,6 +41,19 @@ auto DeclStmtMatcher =
 constexpr const char DeclRefExprStr[] = "declRefExpr";
 auto DeclRefExprMatcher = traverse(TK_IgnoreUnlessSpelledInSource,
                                    declRefExpr().bind(DeclRefExprStr));
+
+
+unsigned getRecordDeclHash(const RecordDecl &RD) {
+  ODRHash Hash;
+  Hash.AddRecordDecl(&RD);
+  for (const auto *Attr : RD.attrs()) {
+    Hash.AddIdentifierInfo(Attr->getAttrName());
+  }
+  // FIXME: do not check the nested RecordDecl
+  return Hash.CalculateHash();
+}
+
+
 template<typename NodeType>
 concept PrettyDumpNode = requires(const NodeType &Node, const ASTContext& Context) {
   Node.dumpPretty(Context);
@@ -54,7 +74,7 @@ public:
       return;
     }
 
-    debugDump(Result, *Node);
+//    debugDump(Result, *Node);
     auto *Handler = static_cast<MatcherHandler *>(this);
     Handler->run(Result, *Node);
   }
@@ -77,7 +97,20 @@ public:
   using ScannerMatcherHandler::ScannerMatcherHandler;
 
   void run(const MatchFinder::MatchResult &Result, const TypedefDecl &TD) {
-    // TODO
+    debugDump(Result, TD);
+
+    CharSourceRange FullRange = getAssociatedRange(TD, *Result.Context);
+    llvm::errs() << getText(FullRange, *Result.Context) << "\n";
+
+//    clang::QualType AliasedType = TD.getUnderlyingType();
+//    ODRHash Hash;
+//    Hash.AddQualType(AliasedType);
+//    Hash.AddType(AliasedType.getTypePtr());
+//    auto HashValue = Hash.CalculateHash();
+//    llvm::errs() << std::format("{}:0x{:x}\n", TD.getName().data(), HashValue);
+
+//    Context.recordSymbol(TD.getName(), FullRange, TD.getKind(),
+//                         TD, 0, std::nullopt, false, false);
   }
 };
 
@@ -88,7 +121,21 @@ public:
   using ScannerMatcherHandler::ScannerMatcherHandler;
 
   void run(const MatchFinder::MatchResult &Result, const RecordDecl &RD) {
-    // TODO
+    if (RD.getName().empty()){
+      return;
+    }
+    debugDump(Result, RD);
+
+    CharSourceRange FullRange = getAssociatedRange(RD, *Result.Context);
+
+    unsigned Hash = getRecordDeclHash(RD);
+
+    llvm::errs() << getText(FullRange, *Result.Context) << std::format("0x{:x}", Hash) <<"\n";
+
+
+    Context.recordSymbol(RD.getName(), FullRange, RD.getKind(),
+                         StorageClass::SC_Extern, Hash, std::nullopt, false,
+                         false);
   }
 };
 
@@ -98,6 +145,7 @@ class EnumDeclHandler
 
 public:
   void run(const MatchFinder::MatchResult &Result, const EnumDecl &ED) {
+    debugDump(Result, ED);
     // TODO
   }
 };
@@ -108,6 +156,12 @@ public:
   using ScannerMatcherHandler::ScannerMatcherHandler;
 
   void run(const MatchFinder::MatchResult &Result, const VarDecl &VD) {
+    if (VD.hasLocalStorage()) {
+      return;
+    }
+
+    debugDump(Result, VD);
+    auto RangeStr = VD.getSourceRange().printToString(*Result.SourceManager);
     // TODO
   }
 };
@@ -129,8 +183,10 @@ public:
       ImplHash = Hash.CalculateHash();
 //        llvm::errs() << std::format("BodyHash :0x{:x}\n", ImplHash.value());
     }
-
-    Context.recordSymbol(FD.getName(), FD.getSourceRange(), FD.getKind(),
+    debugDump(Result, FD);
+    CharSourceRange FullRange = getAssociatedRange(FD, *Result.Context);
+    llvm::errs() << getText(FullRange, *Result.Context) << "\n";
+    Context.recordSymbol(FD.getName(), FullRange, FD.getKind(),
                          FD.getStorageClass(), ODRHash, ImplHash,
                          FD.isInlineSpecified(), false);
   }
@@ -152,6 +208,7 @@ public:
   using ScannerMatcherHandler::ScannerMatcherHandler;
 
   void run(const MatchFinder::MatchResult &Result, const DeclStmt &DS) {
+    debugDump(Result, DS);
     // TODO
   }
 };
@@ -162,6 +219,7 @@ public:
   using ScannerMatcherHandler::ScannerMatcherHandler;
 
   void run(const MatchFinder::MatchResult &Result, const DeclRefExpr &DRE) {
+    debugDump(Result, DRE);
     // TODO
   }
 };
