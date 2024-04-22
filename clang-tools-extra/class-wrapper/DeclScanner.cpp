@@ -15,10 +15,12 @@
 namespace clang::class_wrapper {
 using namespace clang::ast_matchers;
 
-//SourceRange getFullRange(const ASTContext &Context, const SourceRange &Range) {
-//  SourceLocation AfterEnd = clang::Lexer::getLocForEndOfToken(Range.getEnd(), 0, Context.getSourceManager(), Context.getLangOpts());
-//  return {Range.getBegin(), AfterEnd};
-//}
+// SourceRange getFullRange(const ASTContext &Context, const SourceRange &Range)
+// {
+//   SourceLocation AfterEnd = clang::Lexer::getLocForEndOfToken(Range.getEnd(),
+//   0, Context.getSourceManager(), Context.getLangOpts()); return
+//   {Range.getBegin(), AfterEnd};
+// }
 
 constexpr const char TypedefDeclStr[] = "typedefDecl";
 auto TypedefDeclMatcher = traverse(TK_IgnoreUnlessSpelledInSource,
@@ -42,6 +44,8 @@ constexpr const char DeclRefExprStr[] = "declRefExpr";
 auto DeclRefExprMatcher = traverse(TK_IgnoreUnlessSpelledInSource,
                                    declRefExpr().bind(DeclRefExprStr));
 
+namespace {
+DenseMap<const Type *, unsigned> TypeHashMap;
 
 unsigned getRecordDeclHash(const RecordDecl &RD) {
   ODRHash Hash;
@@ -49,15 +53,41 @@ unsigned getRecordDeclHash(const RecordDecl &RD) {
   for (const auto *Attr : RD.attrs()) {
     Hash.AddIdentifierInfo(Attr->getAttrName());
   }
-  // FIXME: do not check the nested RecordDecl
-  return Hash.CalculateHash();
+  for (const auto *Field : RD.fields()) {
+    QualType FieldType = Field->getType();
+    if (FieldType->isRecordType()) {
+      const Type *TypePtr = Field->getType().getTypePtr();
+      assert(TypeHashMap.contains(TypePtr));
+      Hash.AddStructuralValue(
+          clang::APValue(llvm::APSInt(TypeHashMap[TypePtr])));
+    }
+  }
+
+  unsigned HashValue = Hash.CalculateHash();
+  const Type *SelfType = RD.getTypeForDecl();
+  assert(SelfType);
+  assert(!TypeHashMap.contains(SelfType));
+  TypeHashMap[SelfType] = HashValue;
+  return HashValue;
 }
 
+class ScannerSourceFileCallback : public SourceFileCallbacks {
+  void handleEndSource() override { TypeHashMap.clear(); }
 
-template<typename NodeType>
-concept PrettyDumpNode = requires(const NodeType &Node, const ASTContext& Context) {
-  Node.dumpPretty(Context);
+public:
+  static ScannerSourceFileCallback *get() {
+    static ScannerSourceFileCallback Instance;
+    return &Instance;
+  }
 };
+
+} // namespace
+
+template <typename NodeType>
+concept PrettyDumpNode =
+    requires(const NodeType &Node, const ASTContext &Context) {
+      Node.dumpPretty(Context);
+    };
 
 template <typename MatcherHandler, typename NodeType, auto bindName>
 class ScannerMatcherHandler : public MatchFinder::MatchCallback {
@@ -74,7 +104,7 @@ public:
       return;
     }
 
-//    debugDump(Result, *Node);
+    //    debugDump(Result, *Node);
     auto *Handler = static_cast<MatcherHandler *>(this);
     Handler->run(Result, *Node);
   }
@@ -102,15 +132,16 @@ public:
     CharSourceRange FullRange = getAssociatedRange(TD, *Result.Context);
     llvm::errs() << getText(FullRange, *Result.Context) << "\n";
 
-//    clang::QualType AliasedType = TD.getUnderlyingType();
-//    ODRHash Hash;
-//    Hash.AddQualType(AliasedType);
-//    Hash.AddType(AliasedType.getTypePtr());
-//    auto HashValue = Hash.CalculateHash();
-//    llvm::errs() << std::format("{}:0x{:x}\n", TD.getName().data(), HashValue);
+    //    clang::QualType AliasedType = TD.getUnderlyingType();
+    //    ODRHash Hash;
+    //    Hash.AddQualType(AliasedType);
+    //    Hash.AddType(AliasedType.getTypePtr());
+    //    auto HashValue = Hash.CalculateHash();
+    //    llvm::errs() << std::format("{}:0x{:x}\n", TD.getName().data(),
+    //    HashValue);
 
-//    Context.recordSymbol(TD.getName(), FullRange, TD.getKind(),
-//                         TD, 0, std::nullopt, false, false);
+    //    Context.recordSymbol(TD.getName(), FullRange, TD.getKind(),
+    //                         TD, 0, std::nullopt, false, false);
   }
 };
 
@@ -121,7 +152,7 @@ public:
   using ScannerMatcherHandler::ScannerMatcherHandler;
 
   void run(const MatchFinder::MatchResult &Result, const RecordDecl &RD) {
-    if (RD.getName().empty()){
+    if (RD.getName().empty()) {
       return;
     }
     debugDump(Result, RD);
@@ -130,8 +161,8 @@ public:
 
     unsigned Hash = getRecordDeclHash(RD);
 
-    llvm::errs() << getText(FullRange, *Result.Context) << std::format("0x{:x}", Hash) <<"\n";
-
+    llvm::errs() << getText(FullRange, *Result.Context)
+                 << std::format("0x{:x}", Hash) << "\n";
 
     Context.recordSymbol(RD.getName(), FullRange, RD.getKind(),
                          StorageClass::SC_Extern, Hash, std::nullopt, false,
@@ -174,14 +205,16 @@ public:
 
   void run(const MatchFinder::MatchResult &Result, const FunctionDecl &FD) {
     unsigned ODRHash = getDeclHash(FD);
-//    llvm::errs() << std::format("{}:0x{:x}\n", FD.getType().getAsString(), ODRHash);
+    //    llvm::errs() << std::format("{}:0x{:x}\n", FD.getType().getAsString(),
+    //    ODRHash);
     std::optional<unsigned> ImplHash = std::nullopt;
-    if (FD.hasBody()){
-      Stmt * Body = FD.getBody();
+    if (FD.hasBody()) {
+      Stmt *Body = FD.getBody();
       class ODRHash Hash;
       Hash.AddStmt(Body);
       ImplHash = Hash.CalculateHash();
-//        llvm::errs() << std::format("BodyHash :0x{:x}\n", ImplHash.value());
+      //        llvm::errs() << std::format("BodyHash :0x{:x}\n",
+      //        ImplHash.value());
     }
     debugDump(Result, FD);
     CharSourceRange FullRange = getAssociatedRange(FD, *Result.Context);
@@ -193,14 +226,12 @@ public:
 
   static unsigned getDeclHash(const FunctionDecl &FD) {
     class ODRHash Hash;
-    QualType DeclType = FD.getType();  // return type & param types
+    QualType DeclType = FD.getType(); // return type & param types
     Hash.AddQualType(DeclType);
     Hash.AddBoolean(FD.isStatic());
     return Hash.CalculateHash();
   }
 };
-
-
 
 class DeclStmtHandler
     : public ScannerMatcherHandler<DeclStmtHandler, DeclStmt, DeclStmtStr> {
@@ -246,7 +277,9 @@ void runDeclScanner(const CompilationDatabase &Compilations,
   Finder.addMatcher(VarDeclMatcher, &VarDeclHandler);
   Finder.addMatcher(DeclStmtMatcher, &DeclStmtHandler);
   Finder.addMatcher(DeclRefExprMatcher, &DeclRefHandler);
-  Tool.run(newFrontendActionFactory(&Finder).get());
+
+  Tool.run(newFrontendActionFactory(&Finder, ScannerSourceFileCallback::get())
+               .get());
 
   // TODO:
 }
