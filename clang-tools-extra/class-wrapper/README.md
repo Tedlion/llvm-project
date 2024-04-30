@@ -1,10 +1,10 @@
 # About Class Wrapper
 Class Wrapper is designed to be an independent tool to wrap all code of a build target with one single class. So that multiple objects of the class can be created without copying the text section. Furthermore, functions and variables of different objects can be visited with the universal interface. 
 
-## Design Details
-### Input Multiple CompilationDatabase
+# Design Details
+## Input Multiple CompilationDatabase
 
-### Scanning Once
+## Scanning Once
 Find all TypeDecl, FunctionDecl, and VarDecl.
 
 One map for each target, record (**name**(as key), src_location(for replacement), hash(to check consistency)) 
@@ -15,62 +15,62 @@ Decide the class each function and variable should be in.
 
 Generate new headers and sources(by apply replacements) for each target.
 
-### Recoverable
+## Recoverable
 Unrecoverable? Try compiling first?
 
-### Std Lib Functions
+## Std Lib Functions
 Functions declared in system headers should never be wrapped. How to distinguish those functions?
 
 ---> Check the path of header file where the functions declare.
 If the function is not declared in user dir, it supposed to be std lib functions, and should not be wrapped.
 
-### Should source files be parsed as C++?
-#### Pros:
+## Should source files be parsed as C++?
+### Pros:
 - Some platform-dependent functions are implemented with c++ std lib, such as functions in n_atomic.h.
-#### Cons:
+### Cons:
 - We need to change compile command from the compilation database.
 - Some casting is not allowed in C++, "-fpermissive" is required to avoid compiling errors.
-#### Current Solution:
+### Current Solution:
 - Parse all source files as C.
 - Regard n_atomic.h as system header, so that functions declared in it will not be wrapped or removed.
 
-### Math Functions
+## Math Functions
 Some functions do not rely on status.
 
 Make them global, or static?
 
 Even being non-static seems OK, which may lose some efficiency.
 
-### Type:
+## Type:
 in namespace
-### Global/Static Variable:
+## Global/Static Variable:
 class member
-### Global/Static Function:
+## Global/Static Function:
 class member
-### Function Body:
+## Function Body:
 static variable in body -> class member
 
 others -> nothing to do
 
-### Class Define Contains:
+## Class Define Contains:
 All global symbols.
 
-### Macros:
+## Macros:
 Replace macros which define/declare global symbols.
 
 Leave others unchanged for readability.
 
-### Conflicting Symbols:
+## Conflicting Symbols:
 - Treat all type and non-static symbol conflicting as error.
 - Record all static symbol usages. If a conflict is found later, declarations and usages need to be renamed.
 - Record all function ptrs usages. They need to be replaced with member functions. 
 
 
-### Function Ptrs:
+## Function Ptrs:
 
 
-### Replacements to apply:
-#### Generate New Headers:
+## Replacements to apply:
+### Generate New Headers:
 - DutIn.h
 ```cpp
 #ifndef DUTIN_H
@@ -142,24 +142,27 @@ public:
 - Pre-compiled headers when compiling the transferred project. (Not the function of this tool)
 
 
-#### For Headers:
+### For Headers:
 - Delete all declarations, include type, function and variable declarations.
 - What's remaining? Macros, anything else?
 - Move inline function definitions to new headers.
 
-#### For Sources:
+### For Sources:
 - Include new headers and using namespace at beginning
 - Delete all declarations, include type, function and variable declarations.
 - Add class name before all function definitions.
 
-### Check Code Consistency _(Advanced)_:
-If a type is completely same among all module types, make it in common namespace.
+## Check Code Consistency _(Advanced)_:
+If a type is completely same among all module types, it is regarded to be **consistent**, and it is supposed to be put in common namespace.
+To be more specific, a pointer type is considered to be consistent if and only if the pointed type is consistent. A struct is considered to be consistent if and only if all its fields, including **types and names**, are consistent.
 
-If a variable/function is completely same among all module types, make it in base class.
+A non-local variable is considered to be consistent if and only if its type and name is consistent. A consistent non-local variable is supposed to be put in base class.
 
-If a function's declaration is same among all module types, make it **pure** and **virtual** in base class.
+A function's declaration is considered to be consistent if and only if all its return type, parameter types and names are consistent. A function's implementation is considered to be consistent if and only if its declaration is consistent and statements in its definition body are totally consistent, **including types and names of local variables**. An implementation-consistent function is supposed to be put in base class. Otherwise, if the function is only declaration-consistent, it is supposed to be **pure** and **virtual** in base class and actually implemented in derived class.
 
-How to judge the same?
+### Hash function design:
+#### Problems with clang::ODRHash:
+- The hash value for RecordDecl Type is not calculated. i.e., if struct A is inconsistent, the hash value of a struct contains a field of struct A may have same hash value among all module types.
 
 ## TODO Lists:
 - [x] Accept multiple compilation database argument in command line

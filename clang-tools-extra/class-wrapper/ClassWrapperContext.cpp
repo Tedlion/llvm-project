@@ -8,14 +8,11 @@
 
 namespace clang::class_wrapper {
 
-void ClassWrapperContext::recordSymbol(StringRef Name, CharSourceRange Range,
-                                       Decl::Kind Kind, StorageClass Storage,
-                                       unsigned int DeclTypeHash,
-                                       std::optional<unsigned int> ImplHash,
-                                       bool IsInline, bool IsFuncPtr) {
+void ClassWrapperContext::recordSymbol(const SymbolRecordEntry &Entry) {
   // TODO:
-  SymbolInfo Info{Name, Kind, Storage, IsInline, IsFuncPtr, ImplHash.has_value(),
-                  DeclTypeHash, ImplHash.value_or(0)};
-  DeclSymbols[Name][Range].push_back(Info);
+  SymbolInfo Info{Entry.Name, Entry.Kind, Entry.Storage, Entry.IsInline,
+                  Entry.IsFuncPtr,static_cast<bool>(Entry.ImplHash.Valid),
+                  Entry.InfHash, Entry.ImplHash};
+  DeclSymbols[Entry.Name][Entry.Range].push_back(Info);
 }
 }; // namespace clang::class_wrapper
