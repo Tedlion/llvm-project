@@ -5,22 +5,29 @@ set(LLVM_LINK_COMPONENTS
         FrontendOpenMP
 )
 
-#add_clang_library(classWrapper
-#
-#        DEPENDS
-#        omp_gen
-#)
-#
+add_clang_library(classWrapper
+        DeclScanner.cpp
+        FileFilter.cpp
+        ClassWrapperContext.cpp
+        ExtendedODRHash.cpp
+)
 
-#clang_target_link_libraries(classWrapper
-#        PRIVATE
-#        clangAST
-#        clangASTMatchers
-#        clangBasic
-#        clangDynamicASTMatchers
-#        clangFrontend
-#        clangTooling
-#        clangSerialization
-#)
+clang_target_link_libraries(classWrapper
+        PRIVATE
+        clangAnalysis
+        clangAST
+        clangASTMatchers
+        clangBasic
+        clangFormat
+        clangFrontend
+        clangLex
+        clangSerialization
+        clangTooling
+        clangToolingCore
+)
 
 add_subdirectory(tool)
+
+if(CLANG_INCLUDE_TESTS)
+    add_subdirectory(unittests)
+endif()

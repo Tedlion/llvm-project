@@ -58,7 +58,7 @@ public:
 
   // Use this for ODR checking records in C/Objective-C between modules. This
   // method compares more information than the AddDecl class.
-  void AddRecordDecl(const RecordDecl *Record);
+  virtual void AddRecordDecl(const RecordDecl *Record);
 
   // Use this for ODR checking ObjC interfaces. This
   // method compares more information than the AddDecl class.
@@ -88,7 +88,7 @@ public:
   unsigned CalculateHash();
 
   // Add AST nodes that need to be processed.
-  void AddDecl(const Decl *D);
+  virtual void AddDecl(const Decl *D);
   void AddType(const Type *T);
   void AddQualType(QualType T);
   void AddStmt(const Stmt *S);
