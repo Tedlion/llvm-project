@@ -8,6 +8,7 @@
 #define CLASSWRAPPERCONTEXT_H
 
 #include "FileFilter.h"
+#include "ExtendedODRHash.h"
 
 #include "clang/AST/Decl.h"
 #include "clang/Basic/FileManager.h"
@@ -46,6 +47,17 @@ struct SymbolInfoKey {
 };
 #endif
 
+struct SymbolRecordEntry {
+  StringRef Name;
+  CharSourceRange Range;
+  Decl::Kind Kind;
+  StorageClass Storage = StorageClass::SC_Extern;
+  ExtendedODRHash::HashValue InfHash = ExtendedODRHash::HashValueInvalid;
+  ExtendedODRHash::HashValue ImplHash = ExtendedODRHash::HashValueInvalid;
+  bool IsInline = false;
+  bool IsFuncPtr = false;
+};
+
 struct SymbolInfo {
   StringRef Target;
 
@@ -58,8 +70,8 @@ struct SymbolInfo {
                              // initialized (i.e., is strong defined)
 
   // hash value
-  unsigned DeclTypeHash;
-  unsigned ImplHash;  // Function Define hash or Variable Init hash
+  ExtendedODRHash::HashValue DeclTypeHash;
+  ExtendedODRHash::HashValue  ImplHash;  // Function Define hash or Variable Init hash
 
   // Decision made
   std::string NewName; // use old name if empty
@@ -94,11 +106,7 @@ public:
 
   void setScanningTarget(StringRef Target) { ScanningTarget = Target; }
 
-  void recordSymbol(StringRef Name, CharSourceRange Range, Decl::Kind Kind,
-                    StorageClass Storage,
-                    unsigned DeclTypeHash, std::optional<unsigned> ImplHash,
-                    bool IsInline = false,
-                    bool IsFuncPtr = false);
+  void recordSymbol(const SymbolRecordEntry &Entry);
 
   IntrusiveRefCntPtr<llvm::vfs::FileSystem> getBaseFS() const { return BaseFS; }
   IntrusiveRefCntPtr<FileManager> getFiles() const { return Files; }
