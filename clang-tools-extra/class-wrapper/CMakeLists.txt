@@ -24,6 +24,7 @@ clang_target_link_libraries(classWrapper
         clangSerialization
         clangTooling
         clangToolingCore
+        clangTransformer
 )
 
 add_subdirectory(tool)

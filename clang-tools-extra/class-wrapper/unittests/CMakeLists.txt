@@ -27,6 +27,16 @@ clang_target_link_libraries(ClassWrapperTests
 )
 target_link_libraries(ClassWrapperTests
         PRIVATE
+        classWrapper
         LLVMTestingAnnotations
         LLVMTestingSupport
+#        clangAST
+#        clangASTMatchers
+#        clangBasic
+#        clangFormat
+#        clangFrontend
+#        clangRewrite
+#        clangSerialization
+#        clangTooling
+#        clangToolingCore
 )

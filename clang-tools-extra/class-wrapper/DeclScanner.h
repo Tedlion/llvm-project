@@ -24,6 +24,7 @@ constexpr const char TypedefDeclStr[] = "typedefDecl";
 const auto TypedefDeclMatcher = traverse(TK_IgnoreUnlessSpelledInSource,
                                    typedefDecl().bind(TypedefDeclStr));
 constexpr const char RecordDeclStr[] = "recordDecl";
+//const auto RecordDeclMatcher = recordDecl().bind(RecordDeclStr);
 const auto RecordDeclMatcher =
     traverse(TK_IgnoreUnlessSpelledInSource, recordDecl().bind(RecordDeclStr));
 constexpr const char EnumDeclStr[] = "enumDecl";
@@ -48,7 +49,7 @@ using RecordSymbolFunc = std::function<void(const SymbolRecordEntry&)>;
 
 extern std::unique_ptr<MatchFinder> newDeclScannerMatchFinderFactory(
     const NeedToWrapFunc &NeedToWrap, const RecordSymbolFunc &RecordSymbol,
-    std::shared_ptr<ExtendedODRHash::ODRHashCache> TypeHashCache);
+    const std::shared_ptr<ExtendedODRHash::ODRHashCache> &TypeHashCache);
 
 extern void runDeclScanner(const CompilationDatabase &Compilations,
                            const ArrayRef<std::string> SourcePaths,
