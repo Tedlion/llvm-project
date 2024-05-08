@@ -9,6 +9,7 @@
 
 void clang::class_wrapper::ExtendedODRHash::AddRecordDecl(
     const clang::RecordDecl *RD) {
+  // FIXME: endless recursive!
   ODRHash::AddRecordDecl(RD);
   for (const auto *Attr : RD->attrs()) {
     AddIdentifierInfo(Attr->getAttrName());
