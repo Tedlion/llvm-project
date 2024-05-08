@@ -10,6 +10,7 @@
 #include "DeclScanner.h"
 #include "ExtendedODRHash.h"
 #include "gtest/gtest.h"
+#include <expected>
 #include <set>
 
 using namespace clang;
@@ -19,117 +20,67 @@ namespace clang::class_wrapper {
 
 class DeclScannerTest : public ::testing::Test {
 private:
-
-
+  std::vector<SymbolRecordEntry> MatchedSymbols;
+  std::multimap<ExtendedODRHash::HashValue,
+                std::vector<SymbolRecordEntry>::const_pointer>
+      HashRecords;
 
   const NeedToWrapFunc NeedToWrap = [](StringRef) { return true; };
-  const RecordSymbolFunc RecordSymbol = [this](StringRef Name, CharSourceRange Range,
-                                           Decl::Kind Kind, StorageClass Storage,
-                                           ExtendedODRHash::HashValue InfHash,
-                                           ExtendedODRHash::HashValue ImplHash,
-                                           bool IsInline, bool IsFuncPtr) {
 
-
+  const RecordSymbolFunc RecordSymbol = [this](const SymbolRecordEntry &Entry) {
+    MatchedSymbols.push_back(Entry);
+    if (Entry.InfHash.Valid)
+      HashRecords.insert({Entry.InfHash, &MatchedSymbols.back()});
+    if (Entry.ImplHash.Valid)
+      HashRecords.insert({Entry.ImplHash, &MatchedSymbols.back()});
   };
 
-  std::unique_ptr<MatchFinder> ScannerFinder;
+  bool Found = false;
 
+protected:
+  using ScanResults = std::expected<std::span<const SymbolRecordEntry>, testing::AssertionResult>;
 
-  std::set<ExtendedODRHash::HashValue> HashRecords;
+  ScanResults
+  scanOnCode(StringRef Code, StringRef Filename = "input.c",
+             std::shared_ptr<ExtendedODRHash::ODRHashCache> HashCache =
+                 std::make_shared<ExtendedODRHash::ODRHashCache>()) {
+    auto MatchedResultEnd = MatchedSymbols.end();
 
-  template <typename MatcherHandler, typename NodeType, auto bindName>
-  class VerifyHashValue : public MatchFinder::MatchCallback {
-  private:
-    std::optional<ExtendedODRHash::HashValue> HashValue = std::nullopt;
-    unsigned MatchedCount = 0;
-    const unsigned ExpectedMatchedIndex;
+    std::unique_ptr<MatchFinder> ScannerFinder =
+        newDeclScannerMatchFinderFactory(NeedToWrap, RecordSymbol, HashCache);
 
-  public:
-
-
-
-    std::optional<ExtendedODRHash::HashValue> getHashValue() const {
-      return HashValue;
+    std::unique_ptr<FrontendActionFactory> Factory(
+        newFrontendActionFactory(ScannerFinder.get()));
+    std::vector<std::string> Args = {"-target", "i386-unknown-unknown"};
+    if (!runToolOnCodeWithArgs(Factory->create(), Code, Args, Filename)) {
+      return std::unexpected(testing::AssertionFailure()
+                             << "Parsing error in \"" << Code << "\"");
     }
 
-    void run(const MatchFinder::MatchResult &Result) override {
-      if (MatchedCount == ExpectedMatchedIndex) {
-        const auto *Node = Result.Nodes.getNodeAs<NodeType>(bindName);
-        if (!Node) {
-          ADD_FAILURE() << "Expected Matched";
-          return;
+    return std::span<const SymbolRecordEntry>(MatchedResultEnd, MatchedSymbols.end());
+  }
+
+  static const SymbolRecordEntry * findInScanResults(const ScanResults &Results,
+                                                    StringRef Name,
+                                                    unsigned Index = 0) {
+    if (!Results)
+      return nullptr;
+    for (const SymbolRecordEntry &Entry : Results.value()) {
+      unsigned MatchedIndex = 0;
+      if (Entry.Name == Name) {
+        MatchedIndex++;
+        if (MatchedIndex == Index) {
+          return &Entry;
         }
-        ExtendedODRHash::ODRHashCache HashCache;
-        ExtendedODRHash Hash(HashCache);
-        Hash.AddRecordDecl(Node);
-        HashValue = Hash.getHashValue();
       }
-      ++MatchedCount;
     }
-
-  };
-
-  Match
-
-public:
-  /**
-   * @brief
-   * @param Code
-   * @param AMatcher
-   * @param ExpectedHashValue if ExpectedHashValue equals std::nullopt,
-   * the hash value of the matched node is supposed to be unique,
-   * i.e., not in HashRecords.
-   * @Param HashValue if not nullptr, the hash value of the matched node will be
-   * stored in it.
-   * @param CompileArgs
-   * @param MatchedIndex calculate the hash value of the MatchedIndex-th matched
-   * node
-   * @param Filename
-   * @param VirtualMappedFiles
-   * @return
-   */
-  template <typename T>
-  testing::AssertionResult matchAndCheckHashValue(
-      const Twine &Code, const T &AMatcher,
-      std::optional<ExtendedODRHash::HashValue> ExpectedHashValue,
-      ExtendedODRHash::HashValue *HashValue = nullptr,
-      ArrayRef<std::string> CompileArgs = {}, unsigned MatchedIndex = 0,
-      StringRef Filename = "input.c",
-      const FileContentMappings &VirtualMappedFiles = FileContentMappings()) {
-
-Finder Finder;
-
-    if (ExpectedHashValue.) {
-      HashRecords.insert(*ExpectedHashValue);
-    }
-    return matchAndVerifyResultConditionally(
-        Code, AMatcher, std::move(FindResultVerifier), true, "input.c");
+    return nullptr;
   }
-};
-
-class VerifyHashUnique : public BoundNodesCallback {
-public:
-  VerifyHashUnique(std::vector<ExtendedODRHash::HashValue> &HashRecords,
-                   size_t &RecordIndex)
-      : HashRecords(HashRecords), RecordIndex(RecordIndex) {}
-
-  bool run(const BoundNodes *Nodes) override {
-    ADD_FAILURE() << "Should not be called";
-    return false;
-  }
-
-  bool run(const BoundNodes *Nodes, ASTContext *Context) override {
-
-  }
-
-private:
-  std::vector<ExtendedODRHash::HashValue> & HashRecords;
-  size_t & RecordIndex;
 
 };
 
 
-TEST_P(DeclScannerTest, TestSimpleStructDefine){
+TEST_F(DeclScannerTest, TestSimpleStructDefine){
   StringRef Input = R"c(
 struct S {
   int a;
@@ -137,12 +88,17 @@ struct S {
 };
 )c";
 
+  ScanResults Results = scanOnCode(Input);
+  const SymbolRecordEntry *Entry = findInScanResults(Results, "S");
+  ASSERT_TRUE(Entry);
 
-  ExtendedODRHash::HashValue HashValue;
-  ASSERT_TRUE(matchAndCheckHashValue(Input, recordDecl(hasName("S")),
-                                     std::nullopt, &HashValue));
-  ASSERT_TRUE(HashValue.Valid);
-  ASSERT_TRUE(HashRecords.insert(HashValue).second);
+  EXPECT_EQ(Entry->Kind, Decl::Kind::CXXRecord);
+
+//  ExtendedODRHash::HashValue HashValue;
+//  ASSERT_TRUE(matchAndCheckHashValue(Input, recordDecl(hasName("S")),
+//                                     std::nullopt, &HashValue));
+//  ASSERT_TRUE(HashValue.Valid);
+//  ASSERT_TRUE(HashRecords.insert(HashValue).second);
 }
 
 

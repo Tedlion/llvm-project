@@ -70,7 +70,7 @@ public:
     }
 
     StringRef FileName = Result.SourceManager->getFilename(Node->getBeginLoc());
-    if (NeedToWrap(FileName)) {
+    if (!NeedToWrap(FileName)) {
       return;
     }
 
@@ -135,14 +135,19 @@ public:
 
     CharSourceRange FullRange = getAssociatedRange(RD, *Result.Context);
 
-    if (RD.isCompleteDefinition()){
+    if (!RD.isCompleteDefinition()) {
       return;
     }
 
-//    unsigned Hash = getRecordDeclHash(RD);
-    unsigned Hash = 0;
-    llvm::errs() << std::format(
-        "{} 0x{:x}\n", getText(FullRange, *Result.Context), Hash);
+    auto HashValue =
+        ExtendedODRHash::calculateRecordDeclHash(&RD, TypeHashCache);
+
+    RecordSymbol(SymbolRecordEntry{
+        RD.getName(), FullRange, RD.getKind(), StorageClass::SC_Extern,
+        ExtendedODRHash::HashValueInvalid, HashValue, false, false});
+    //    unsigned Hash = getRecordDeclHash(RD);
+//    llvm::errs() << std::format(
+//        "{} 0x{:x}\n", getText(FullRange, *Result.Context), Hash);
 
 //    RecordSymbol(RD.getName(), FullRange, RD.getKind(),
 //                         StorageClass::SC_Extern, Hash, std::nullopt, false,
@@ -239,7 +244,7 @@ public:
 
 std::unique_ptr<MatchFinder> newDeclScannerMatchFinderFactory(
     const NeedToWrapFunc &NeedToWrap, const RecordSymbolFunc &RecordSymbol,
-    std::shared_ptr<ExtendedODRHash::ODRHashCache> TypeHashCache) {
+    const std::shared_ptr<ExtendedODRHash::ODRHashCache> & TypeHashCache) {
   class DeclScannerMatchFinder : public MatchFinder {
   private:
     const NeedToWrapFunc MNeedToWrap;
@@ -256,9 +261,9 @@ std::unique_ptr<MatchFinder> newDeclScannerMatchFinderFactory(
   public:
     DeclScannerMatchFinder(
         const NeedToWrapFunc &NeedToWrap, const RecordSymbolFunc &RecordSymbol,
-        std::shared_ptr<ExtendedODRHash::ODRHashCache> TypeHashCache)
+        const std::shared_ptr<ExtendedODRHash::ODRHashCache> &TypeHashCache)
         : MNeedToWrap(NeedToWrap), MRecordSymbol(RecordSymbol),
-          MTypeHashCache(std::move(TypeHashCache)),
+          MTypeHashCache(TypeHashCache),
           TypedefDeclHandler(MNeedToWrap, MRecordSymbol, *MTypeHashCache),
           RecordDeclHandler(MNeedToWrap, MRecordSymbol, *MTypeHashCache),
           EnumDeclHandler(MNeedToWrap, MRecordSymbol, *MTypeHashCache),
@@ -293,7 +298,6 @@ void runDeclScanner(const CompilationDatabase &Compilations,
 
   auto RecordSymbol =
       std::bind_front(&ClassWrapperContext::recordSymbol, Context);
-
 
   auto HashCache = std::make_shared<ExtendedODRHash::ODRHashCache>();
 
