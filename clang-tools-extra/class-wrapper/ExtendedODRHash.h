@@ -105,8 +105,8 @@ public:
       return Cache[T];
     }
     ExtendedODRHash Hash(Cache);
-    Hash.AddRecordDecl(RD);
     Hash.TopDeclType = T;
+    Hash.AddRecordDecl(RD);
     HashValue Value = Hash.CalculateHash();
     if (RD->isCompleteDefinition()) {
       Cache[T] = Value;
