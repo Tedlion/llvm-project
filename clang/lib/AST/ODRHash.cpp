@@ -617,7 +617,7 @@ void ODRHash::AddCXXRecordDecl(const CXXRecordDecl *Record) {
 void ODRHash::AddRecordDecl(const RecordDecl *Record) {
   assert(!isa<CXXRecordDecl>(Record) &&
          "For CXXRecordDecl should call AddCXXRecordDecl.");
-  AddDecl(Record);
+  ODRHash::AddDecl(Record);
 
   // Filter out sub-Decls which will not be processed in order to get an
   // accurate count of Decl's.

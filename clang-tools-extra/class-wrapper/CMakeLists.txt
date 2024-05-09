@@ -5,6 +5,8 @@ set(LLVM_LINK_COMPONENTS
         FrontendOpenMP
 )
 
+add_definitions(-D_SILENCE_CXX23_ALIGNED_STORAGE_DEPRECATION_WARNING)
+
 add_clang_library(classWrapper
         DeclScanner.cpp
         FileFilter.cpp

@@ -142,9 +142,13 @@ public:
     auto HashValue =
         ExtendedODRHash::calculateRecordDeclHash(&RD, TypeHashCache);
 
+    Replacement Replace(*Result.SourceManager, FullRange, StringRef());
+
     RecordSymbol(SymbolRecordEntry{
-        RD.getName(), FullRange, RD.getKind(), StorageClass::SC_Extern,
-        ExtendedODRHash::HashValueInvalid, HashValue, false, false});
+        RD.getName().str(), Replace.getFilePath().str(),
+        tooling::Range(Replace.getOffset(), Replace.getLength()), RD.getKind(),
+        StorageClass::SC_Extern, ExtendedODRHash::HashValueInvalid, HashValue,
+        false, false});
     //    unsigned Hash = getRecordDeclHash(RD);
 //    llvm::errs() << std::format(
 //        "{} 0x{:x}\n", getText(FullRange, *Result.Context), Hash);
