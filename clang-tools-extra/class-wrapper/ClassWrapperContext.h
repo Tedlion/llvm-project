@@ -48,8 +48,9 @@ struct SymbolInfoKey {
 #endif
 
 struct SymbolRecordEntry {
-  StringRef Name;
-  CharSourceRange Range;
+  std::string Name;
+  std::string FilePath;
+  tooling::Range CharRange;
   Decl::Kind Kind;
   StorageClass Storage = StorageClass::SC_Extern;
   ExtendedODRHash::HashValue InfHash = ExtendedODRHash::HashValueInvalid;
@@ -113,17 +114,19 @@ public:
 
 private:
   StringRef ScanningTarget;
+  using RecordRange = std::pair<std::string, tooling::Range>;
 
-  struct CharSourceRangeComparator {
-    bool operator() (const CharSourceRange& Lhs, const CharSourceRange& Rhs) const {
-      return Lhs.getBegin() == Rhs.getBegin()
-                 ? Lhs.getEnd() < Rhs.getEnd()
-          : Lhs.getBegin() < Rhs.getBegin();
+  struct ReplacementRangeComparator {
+    bool operator()(const RecordRange &Lhs, const RecordRange &Rhs) const {
+      if (Lhs.first != Rhs.first) {
+        return Lhs.first < Rhs.first;
+      }
+      return Lhs.second.getOffset() < Rhs.second.getOffset();
     }
   };
 
   StringMap<
-      std::map<CharSourceRange, SmallVector<SymbolInfo, 4>, CharSourceRangeComparator>>
+      std::map<RecordRange, SmallVector<SymbolInfo, 4>, ReplacementRangeComparator>>
       DeclSymbols;
   StringSet<> UsedSymbolName;
 
