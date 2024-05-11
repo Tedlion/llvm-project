@@ -6,7 +6,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-
+#include "GtestSupport.h"
+#include "../Support.h"
 #include "../unittests/ASTMatchers/ASTMatchersTest.h"
 #include "DeclScanner.h"
 #include "ExtendedODRHash.h"
@@ -38,11 +39,22 @@ private:
   bool Found = false;
 
 protected:
-  using ScanResults = std::expected<std::span<const SymbolRecordEntry>,
-                                    testing::AssertionResult>;
+  using ScanResults = std::expected<
+      std::pair<size_t /*begin_index*/, size_t /*end_index(not contained)*/>,
+      testing::AssertionResult>;
 
+  /**
+   * @brief
+   * @param Code
+   * @param Filename
+   * @param CompileArgs
+   * @param HashCache Pass an outer HashCache if you want to use a same cache
+   * for multiple scans
+   * @return std::pair of the begin index and the end index of new matched symbols, testing::AssertionFailure if code parsing fail.
+   */
   ScanResults
   scanOnCode(StringRef Code, StringRef Filename = "input.c",
+             std::vector<std::string> CompileArgs = {},
              std::shared_ptr<ExtendedODRHash::ODRHashCache> HashCache =
                  std::make_shared<ExtendedODRHash::ODRHashCache>()) {
     size_t MatchedCount = MatchedSymbols.size();
@@ -52,31 +64,37 @@ protected:
 
     std::unique_ptr<FrontendActionFactory> Factory(
         newFrontendActionFactory(ScannerFinder.get()));
-    std::vector<std::string> Args = {"-target", "i386-unknown-unknown"};
-    if (!runToolOnCodeWithArgs(Factory->create(), Code, Args, Filename)) {
+    if (llvm::find(CompileArgs, "-target") == CompileArgs.end()) {
+      CompileArgs.push_back("-target");
+      CompileArgs.push_back("i386-unknown-unknown");
+    }
+    if (!runToolOnCodeWithArgs(Factory->create(), Code, CompileArgs,
+                               Filename)) {
       return std::unexpected(testing::AssertionFailure()
                              << "Parsing error in \"" << Code << "\"");
     }
 
-    return std::span<const SymbolRecordEntry>(
-        MatchedSymbols.begin() + MatchedCount, MatchedSymbols.end());
+    return std::make_pair(MatchedCount, MatchedSymbols.size());
   }
 
-  static const SymbolRecordEntry *findInScanResults(const ScanResults &Results,
-                                                    StringRef Name,
-                                                    unsigned Index = 0) {
+  std::expected<SymbolRecordEntry, testing::AssertionResult>
+  findInScanResults(const ScanResults &Results, StringRef Name,
+                    unsigned Index = 0) {
     if (!Results)
-      return nullptr;
-    for (const SymbolRecordEntry &Entry : Results.value()) {
+      return std::unexpected(testing::AssertionFailure()
+                                    << "ScanResults not valid");
+    for (size_t I = Results->first, End = Results->second; I < End;
+         ++I) {
       unsigned MatchedIndex = 0;
-      if (Entry.Name == Name) {
+      if (MatchedSymbols[I].Name == Name) {
         if (MatchedIndex == Index) {
-          return &Entry;
+          return MatchedSymbols[I];
         }
         MatchedIndex++;
       }
     }
-    return nullptr;
+    return std::unexpected(testing::AssertionFailure()
+                           <<std::format("{} not found", Name));
   }
 
   static testing::AssertionResult
@@ -122,56 +140,65 @@ protected:
   }
 };
 
-TEST_F(DeclScannerTest, TestSimpleStructDefine) {
-  StringRef Input = R"c(
+
+StringRef SimpleStructS = R"c(
 struct S {
   int a;
   int b;
 };
 )c";
 
+
+StringRef SimpleStructSWithMacro = R"c(
+struct S{
+int a;
+#if MACRO
+char x;
+#endif
+  int b;};
+)c";
+
+
+TEST_F(DeclScannerTest, TestSimpleStructDefine) {
   ScanResults Results =
-      scanOnCode(Input, "DeclScannerTest/testSimpleStructDefine.c");
-  const SymbolRecordEntry *Entry = findInScanResults(Results, "S");
-  ASSERT_TRUE(Entry);
-  EXPECT_STREQ(Entry->FilePath.data(),
+      scanOnCode(SimpleStructS, "DeclScannerTest/testSimpleStructDefine.c");
+  auto EntryOrFail = findInScanResults(Results, "S");
+  ASSERT_TRUE(EntryOrFail);
+  const SymbolRecordEntry & Entry = EntryOrFail.value();
+  EXPECT_STREQ(Entry.FilePath.data(),
                "DeclScannerTest/testSimpleStructDefine.c");
-  EXPECT_TRUE(verifyRangeMatched(Input, Entry->CharRange,
+  EXPECT_TRUE(verifyRangeMatched(SimpleStructS, Entry.CharRange,
                                  "struct S {\n"
                                  "  int a;\n"
                                  "  int b;\n"
                                  "};\n"));
-  EXPECT_TRUE(verifyRangeMatched(Input, Entry->CharRange, "struct S", "};\n"));
-  EXPECT_EQ(Entry->Kind, Decl::Kind::Record);
-  EXPECT_EQ(Entry->Storage, StorageClass::SC_Extern);
-  EXPECT_FALSE(Entry->InfHash.Valid);
-  EXPECT_TRUE(Entry->ImplHash.Valid);
-  EXPECT_TRUE(Entry->ImplHash.Completed);
-  EXPECT_FALSE(Entry->IsInline);
-  EXPECT_FALSE(Entry->IsFuncPtr);
-  EXPECT_EQ(getHashRecordCount(Entry->ImplHash), 1);
+  EXPECT_TRUE(verifyRangeMatched(SimpleStructS, Entry.CharRange, "struct S", "};\n"));
+  EXPECT_EQ(Entry.Kind, Decl::Kind::Record);
+  EXPECT_EQ(Entry.Storage, StorageClass::SC_Extern);
+  EXPECT_FALSE(Entry.InfHash.Valid);
+  EXPECT_TRUE(Entry.ImplHash.Valid);
+  EXPECT_TRUE(Entry.ImplHash.Completed);
+  EXPECT_FALSE(Entry.IsInline);
+  EXPECT_FALSE(Entry.IsFuncPtr);
+  EXPECT_EQ(getHashRecordCount(Entry.ImplHash), 1);
 }
 
 TEST_F(DeclScannerTest, TestStructDefineSameHash) {
-  StringRef Input1 = R"c(
-struct S {
-  int a;
-  int b;
-};
-)c";
-
-  StringRef Input2 = R"c(
-struct S{
-int a;
-//some comment here
-  int b;};
-)c";
-
-  ScanResults Results1 = scanOnCode(Input1, "input1.c");
-  const SymbolRecordEntry Entry1 = *findInScanResults(Results1, "S");
-  ScanResults Results2 = scanOnCode(Input2, "input2.c");
-  const SymbolRecordEntry Entry2 = *findInScanResults(Results2, "S");
-  EXPECT_EQ(Entry1.ImplHash, Entry2.ImplHash);
+  auto EntryOrFail1 =
+      findInScanResults(scanOnCode(SimpleStructS), "S");
+  ASSERT_TRUE(EntryOrFail1);
+  auto EntryOrFail2 =
+      findInScanResults(scanOnCode(SimpleStructSWithMacro, "input2.c",
+                                   {"-DMACRO1"}), "S");
+  ASSERT_TRUE(EntryOrFail2);
+  EXPECT_EQ(EntryOrFail1->ImplHash, EntryOrFail2->ImplHash);
 }
+
+TEST_F(DeclScannerTest, TEMP1){
+  auto EntryOrFail1 =
+      findInScanResults(scanOnCode(SimpleStructS, "input1.c"), "T");
+        ASSERT_TRUE(EntryOrFail1);
+}
+
 
 } // namespace clang::class_wrapper
