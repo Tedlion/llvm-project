@@ -41,7 +41,7 @@ private:
 protected:
   using ScanResults = std::expected<
       std::pair<size_t /*begin_index*/, size_t /*end_index(not contained)*/>,
-      testing::AssertionResult>;
+      std::string>;
 
   /**
    * @brief
@@ -70,19 +70,17 @@ protected:
     }
     if (!runToolOnCodeWithArgs(Factory->create(), Code, CompileArgs,
                                Filename)) {
-      return std::unexpected(testing::AssertionFailure()
-                             << "Parsing error in \"" << Code << "\"");
+      return std::unexpected(std::format("Parsing error in \"{}\"", Code));
     }
 
     return std::make_pair(MatchedCount, MatchedSymbols.size());
   }
 
-  std::expected<SymbolRecordEntry, testing::AssertionResult>
+  std::expected<SymbolRecordEntry, std::string>
   findInScanResults(const ScanResults &Results, StringRef Name,
                     unsigned Index = 0) {
     if (!Results)
-      return std::unexpected(testing::AssertionFailure()
-                                    << "ScanResults not valid");
+      return std::unexpected("ScanResults not valid");
     for (size_t I = Results->first, End = Results->second; I < End;
          ++I) {
       unsigned MatchedIndex = 0;
@@ -93,8 +91,7 @@ protected:
         MatchedIndex++;
       }
     }
-    return std::unexpected(testing::AssertionFailure()
-                           <<std::format("{} not found", Name));
+    return std::unexpected(std::format("{} not found", Name));
   }
 
   static testing::AssertionResult
@@ -163,7 +160,7 @@ TEST_F(DeclScannerTest, TestSimpleStructDefine) {
   ScanResults Results =
       scanOnCode(SimpleStructS, "DeclScannerTest/testSimpleStructDefine.c");
   auto EntryOrFail = findInScanResults(Results, "S");
-  ASSERT_TRUE(EntryOrFail);
+  ASSERT_EXPECTED_VALUE(EntryOrFail);
   const SymbolRecordEntry & Entry = EntryOrFail.value();
   EXPECT_STREQ(Entry.FilePath.data(),
                "DeclScannerTest/testSimpleStructDefine.c");
@@ -183,22 +180,56 @@ TEST_F(DeclScannerTest, TestSimpleStructDefine) {
   EXPECT_EQ(getHashRecordCount(Entry.ImplHash), 1);
 }
 
+
 TEST_F(DeclScannerTest, TestStructDefineSameHash) {
   auto EntryOrFail1 =
       findInScanResults(scanOnCode(SimpleStructS), "S");
-  ASSERT_TRUE(EntryOrFail1);
+  ASSERT_EXPECTED_VALUE(EntryOrFail1);
   auto EntryOrFail2 =
       findInScanResults(scanOnCode(SimpleStructSWithMacro, "input2.c",
                                    {"-DMACRO1"}), "S");
-  ASSERT_TRUE(EntryOrFail2);
+  ASSERT_EXPECTED_VALUE(EntryOrFail2);
   EXPECT_EQ(EntryOrFail1->ImplHash, EntryOrFail2->ImplHash);
 }
 
-TEST_F(DeclScannerTest, TEMP1){
+
+TEST_F(DeclScannerTest, TestStructDefineDifferentHash) {
   auto EntryOrFail1 =
-      findInScanResults(scanOnCode(SimpleStructS, "input1.c"), "T");
-        ASSERT_TRUE(EntryOrFail1);
+      findInScanResults(scanOnCode(SimpleStructSWithMacro), "S");
+  ASSERT_EXPECTED_VALUE(EntryOrFail1);
+  auto EntryOrFail2 =
+      findInScanResults(scanOnCode(SimpleStructSWithMacro, "input.c",
+                                   {"-DMACRO"}), "S");
+  ASSERT_EXPECTED_VALUE(EntryOrFail2);
+  EXPECT_NE(EntryOrFail1->ImplHash, EntryOrFail2->ImplHash);
 }
 
 
+TEST_F(DeclScannerTest, SimpleNotFound){
+  auto EntryOrFail1 =
+      findInScanResults(scanOnCode(SimpleStructS, "input1.c"), "T");
+  ASSERT_EXPECTED_ERROR(EntryOrFail1);
+}
+
+StringRef StructSWithSelfPtr = R"c(
+struct S{
+  int a;
+  struct S * ps;
+};
+)c";
+
+
+TEST_F(DeclScannerTest, TestStructDefineWithSelfPtr) {
+  ScanResults Results = scanOnCode(StructSWithSelfPtr);
+  auto EntryOrFail = findInScanResults(Results, "S");
+  ASSERT_EXPECTED_VALUE(EntryOrFail);
+  // suppose only one matched
+  EXPECT_EXPECTED_ERROR(findInScanResults(Results, "S", 1));
+  const SymbolRecordEntry &Entry = EntryOrFail.value();
+  EXPECT_TRUE(verifyRangeMatched(StructSWithSelfPtr, Entry.CharRange,
+                                 "struct S", "};\n"));
+  EXPECT_EQ(Entry.Kind, Decl::Kind::Record);
+  EXPECT_TRUE(Entry.ImplHash.Valid);
+  EXPECT_TRUE(Entry.ImplHash.Completed);
+}
 } // namespace clang::class_wrapper

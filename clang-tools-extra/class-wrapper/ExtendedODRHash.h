@@ -60,9 +60,9 @@ class ExtendedODRHash : private ODRHash {
 public:
   union HashValue {
     struct {
-      unsigned long long Valid : 1;
-      unsigned long long Completed : 1;
-      unsigned long long Hash : 62;
+      unsigned long long Valid      : 1;
+      unsigned long long Completed  : 1;
+      unsigned long long Hash       : 62;
     };
     unsigned long long Value;
 
@@ -86,6 +86,8 @@ public:
   ExtendedODRHash(ODRHashCache &Cache) : Cache(Cache) {}
 
   HashValue CalculateHash() {
+    // FIXME: If NameDecl's Type is found in cache,
+    //  then the hash value should be the same as the one in cache.
     unsigned ODRHash = ODRHash::CalculateHash();
     return {true, RecordHash.Completed,
             llvm::hash_combine(ODRHash, RecordHash.Value)};

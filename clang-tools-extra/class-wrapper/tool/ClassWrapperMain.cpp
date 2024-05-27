@@ -5,7 +5,6 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-// #include "clang/Tooling/CommonOptionsParser.h"
 
 #include "../ClassWrapperContext.h"
 #include "../DeclScanner.h"

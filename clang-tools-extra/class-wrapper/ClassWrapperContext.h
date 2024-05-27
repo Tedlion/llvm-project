@@ -36,6 +36,9 @@ using tooling::Replacements;
 // To decide replacement:
 // To apply replacement: vectors?
 
+/// After scanning the source code once, to-decide replacements are stored.
+///
+
 #if 0
 struct SymbolInfoKey {
   StringRef FileName;
