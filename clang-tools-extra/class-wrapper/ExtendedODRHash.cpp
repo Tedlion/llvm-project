@@ -9,12 +9,34 @@
 
 void clang::class_wrapper::ExtendedODRHash::AddRecordDecl(
     const clang::RecordDecl *RD) {
-  // FIXME: endless recursive!
-  ODRHash::AddRecordDecl(RD);
+/// What may be contained in a RecordDecl? Consider the following:
+/// \code{.c}
+/// struct S1{
+///     struct S1 * ps1;    // ptr to self
+///     struct S2 * ps2;    // ptr to another struct
+///     struct S3 s3;  // another struct, which must be completely defined before
+///     struct {
+///         ...
+///     } s4;  // struct defined nested in
+/// };
+/// \endcode
+
   for (const auto *Attr : RD->attrs()) {
     AddIdentifierInfo(Attr->getAttrName());
   }
   const Type *RecordType = RD->getTypeForDecl();
+
+  if (Cache.contains(RecordType)){
+    HashValue SubHash = Cache[RecordType];
+    RecordHash.Hash = llvm::hash_combine(RecordHash.Value, SubHash.Value);
+    if (!SubHash.Completed) {
+      RecordHash.Completed = false;
+    }
+    return;
+  }
+
+  ODRHash::AddRecordDecl(RD);
+
   if (RecordType == TopDeclType) {
   } else if (Cache.contains(RecordType)) {
     HashValue SubHash = Cache[RecordType];

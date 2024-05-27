@@ -139,6 +139,13 @@ public:
       return;
     }
 
+    auto ParentNode = Result.Context->getParents(RD);
+    if (ParentNode.size() != 1 ||
+        !ParentNode[0].getNodeKind().isSame(
+            ASTNodeKind::getFromNodeKind<clang::TranslationUnitDecl>())) {
+      return;
+      }
+
     auto HashValue =
         ExtendedODRHash::calculateRecordDeclHash(&RD, TypeHashCache);
 
