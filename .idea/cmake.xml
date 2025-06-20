@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<project version="4">
-  <component name="CMakeSharedSettings">
-    <configurations>
-      <configuration PROFILE_NAME="RelWithDebInfo-Visual Studio amd64" ENABLED="true" CONFIG_NAME="RelWithDebInfo" TOOLCHAIN_NAME="Visual Studio amd64" GENERATION_OPTIONS="-DLLVM_ENABLE_PROJECTS=clang;clang-tools-extra -DLLVM_ENABLE_RUNTIMES=libcxx;libc;compiler-rt -DCMAKE_CXX_FLAGS=/utf-8 -DCMAKE_INSTALL_PREFIX:PATH=&quot;C:/Programs/LLVM/&quot; -DCLANG_DEFAULT_CXX_STDLIB=libc++ -DCLANG_DEFAULT_RTLIB=compiler-rt -DCMAKE_CXX_COMPILE_FEATURES=cxx_std_17 -DCMAKE_CXX17_COMPILE_FEATURES=cxx_std_17" />
-      <configuration PROFILE_NAME="Release-Visual Studio amd64" ENABLED="true" CONFIG_NAME="Release" TOOLCHAIN_NAME="Visual Studio amd64" GENERATION_OPTIONS="-DLLVM_ENABLE_PROJECTS=clang;clang-tools-extra -DLLVM_ENABLE_RUNTIMES=libcxx;libc;compiler-rt -DCMAKE_CXX_FLAGS=/utf-8 -DCMAKE_INSTALL_PREFIX:PATH=&quot;C:/Programs/LLVM/&quot; -DCLANG_DEFAULT_CXX_STDLIB=libc++ -DCLANG_DEFAULT_RTLIB=compiler-rt -DCMAKE_CXX_COMPILE_FEATURES=cxx_std_17 -DCMAKE_CXX17_COMPILE_FEATURES=cxx_std_17" />
-    </configurations>
-  </component>
-</project>
