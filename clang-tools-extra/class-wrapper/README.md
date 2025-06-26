@@ -164,6 +164,26 @@ A function's declaration is considered to be consistent if and only if all its r
 #### Problems with clang::ODRHash:
 - The hash value for RecordDecl Type is not calculated. i.e., if struct A is inconsistent, the hash value of a struct contains a field of struct A may have same hash value among all module types.
 
+## Dependency Chains:
+### Why necessary?
+- RecordDecls must be defined in dependency orders
+- Solve the insufficient visiting problem of ODRHash RecordDecl 
+### Record what?
+#### RecordDecls£º
+- non-built-in types of all fields
+#### VarDecls (not local)£º
+- the type if it is not built-in
+- variables and non-built-in types in the initialization expression (if exists)
+#### FunctionDecls (not the definition body)£º
+- non-built-in types of all parameters and return type.
+#### FunctionDecls (definition body)£º
+- All RecordDecls ref in the function body
+- All non-local var ref
+- All functions ref
+### How to record?
+- Some of RecordsDecls/global variables maybe not defined.
+- Set of (Names, Source Range)?
+
 ## TODO Lists:
 - [x] Accept multiple compilation database argument in command line
 - [ ] Scan files for each database, record all declarations
