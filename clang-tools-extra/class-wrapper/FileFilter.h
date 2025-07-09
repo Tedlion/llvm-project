@@ -30,7 +30,7 @@ private:
     Exclusive,
   };
 
-  // FIXME: FilePathPatterns has a StringRef member and brings lifetime issue!
+  // FIXME: FilePathPatterns has a StringRef member and brings lifetime issue?
   std::vector<std::pair<MatchType, GlobPattern>> FilePathPatterns;
 
 };
