@@ -7,11 +7,13 @@
 //
 //===----------------------------------------------------------------------===//
 #include "GtestSupport.h"
+
 #include "../Support.h"
 #include "../unittests/ASTMatchers/ASTMatchersTest.h"
 #include "DeclScanner.h"
 #include "ExtendedODRHash.h"
 #include "gtest/gtest.h"
+
 #include <expected>
 
 using namespace clang;

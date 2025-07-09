@@ -70,11 +70,11 @@ Leave others unchanged for readability.
 
 
 ## Replacements to apply:
-### Generate New Headers:
-- DutIn.h
+### Generate Modules:
+- dut.cppm
 ```cpp
-#ifndef DUTIN_H
-#define DUTIN_H
+export module dut;
+
 namespace test_plat::dut {
 struct common_type {
   ...
@@ -87,14 +87,13 @@ public:
   virtual void func_same_inf_differnet_impl(common_type arg) = 0;
 };
 };  // namespace test_plat::dut
-#endif
 ```
 
-- CCOIn.h
+- cco.cppm
 ```cpp
-#ifndef CCOIN_H
-#define CCOIN_H
-#include "DutIn.h"
+export module dut.cco;
+import dut;
+
 namespace test_plat::dut::cco{
 struct type1{
     ...
@@ -112,14 +111,13 @@ public:
     void func2(type2 arg);
 };
 };  // namespace test_plat::dut::cco
-#endif
 ```
 
-- STAIn.h
+- sta.cppm
 ```cpp
-#ifndef STAIN_H
-#define STAIN_H
-#include "DutIn.h"
+export module dut.sta;
+import dut;
+
 namespace test_plat::dut::sta{
 struct type1{
     ...
@@ -139,21 +137,20 @@ public:
 };
 };  // test_plat::dut::sta
 ```
-- Pre-compiled headers when compiling the transferred project. (Not the function of this tool)
 
 
 ### For Headers:
 - Delete all declarations, include type, function and variable declarations.
 - What's remaining? Macros, anything else?
-- Move inline function definitions to new headers.
+- Move inline function definitions to new modules.
 
 ### For Sources:
-- Include new headers and using namespace at beginning
-- Delete all declarations, include type, function and variable declarations.
+- Import modules and using namespace at beginning
+- Delete all declarations, including type, function and variable declarations.
 - Add class name before all function definitions.
 
 ## Check Code Consistency _(Advanced)_:
-If a type is completely same among all module types, it is regarded to be **consistent**, and it is supposed to be put in common namespace.
+If a type is completely same among all dut types, it is regarded to be **consistent**, and it is supposed to be put in common namespace.
 To be more specific, a pointer type is considered to be consistent if and only if the pointed type is consistent. A struct is considered to be consistent if and only if all its fields, including **types and names**, are consistent.
 
 A non-local variable is considered to be consistent if and only if its type and name is consistent. A consistent non-local variable is supposed to be put in base class.
@@ -162,7 +159,12 @@ A function's declaration is considered to be consistent if and only if all its r
 
 ### Hash function design:
 #### Problems with clang::ODRHash:
-- The hash value for RecordDecl Type is not calculated. i.e., if struct A is inconsistent, the hash value of a struct contains a field of struct A may have same hash value among all module types.
+The hash value for RecordDecl Type is not calculated. i.e., if struct A is inconsistent, the hash value of a struct contains a field of struct A may have same hash value among all module types. Similar problems may happen to functions.
+
+#### Solutions:
+We judge two symbols are consistent if and only if the following two conditions are satisfied simultaneously: 
+- Their proprocesser result (after macro replacement) is exactly the same.
+- All symbols they relie on are consistent.
 
 ## Dependency Chains:
 ### Why necessary?

@@ -22,6 +22,8 @@ using namespace clang::tooling;
 using namespace clang::class_wrapper;
 using namespace llvm;
 
+
+namespace {
 class PairParser
     : public llvm::cl::parser<std::pair<std::string, std::string>> {
 public:
@@ -39,21 +41,9 @@ public:
     Val.second = ArgValue.substr(EqualsPos + 1).str();
     return false;
   }
-
-  // FIXME: Option help info require override implementation of the following
-  // functions
-
-  //  size_t getOptionWidth(const cl::Option &O) const override {
-  //    ;
-  //  }
-  //
-  //  void printOptionInfo(const cl::Option &O, size_t GlobalWidth) const
-  //  override {
-  //
-  //  }
 };
 
-static cl::OptionCategory ClassWrapperCategory("Class Wrapper Options");
+cl::OptionCategory ClassWrapperCategory("Class Wrapper Options");
 
 // We need SourceRoot to distinguish user symbol declarations and system
 // declarations.
@@ -97,9 +87,11 @@ cl::list<std::string>
                        "compilation command line."),
               cl::value_desc("extra_args"), cl::ZeroOrMore, cl::CommaSeparated,
               cl::cat(ClassWrapperCategory));
+} // namespace
+
 
 int main(int argc, const char **argv) {
-  llvm::sys::PrintStackTraceOnErrorSignal(argv[0]);
+  sys::PrintStackTraceOnErrorSignal(argv[0]);
   cl::HideUnrelatedOptions(ClassWrapperCategory);
 
   if (!cl::ParseCommandLineOptions(argc, argv)) {
@@ -110,7 +102,7 @@ int main(int argc, const char **argv) {
                        SourceRoot);
   FileFilter NonWrappedFilter(NonWrappedFiles.begin(), NonWrappedFiles.end(),
                               SourceRoot);
-  IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS = llvm::vfs::getRealFileSystem();
+  IntrusiveRefCntPtr<vfs::FileSystem> FS = vfs::getRealFileSystem();
   IntrusiveRefCntPtr<FileManager> Files = new FileManager(FileSystemOptions(), FS);
   ClassWrapperContext Context(SourceRoot, SrcFilter, NonWrappedFilter, FS, Files);
   llvm::outs() << "\n\nCompilation Databases: \n";

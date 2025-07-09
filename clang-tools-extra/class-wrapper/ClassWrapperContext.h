@@ -55,7 +55,7 @@ struct SymbolRecordEntry {
   std::string FilePath;
   tooling::Range CharRange;
   Decl::Kind Kind;
-  StorageClass Storage = StorageClass::SC_Extern;
+  StorageClass Storage = SC_Extern;
   ExtendedODRHash::HashValue InfHash = ExtendedODRHash::HashValueInvalid;
   ExtendedODRHash::HashValue ImplHash = ExtendedODRHash::HashValueInvalid;
   bool IsInline = false;
