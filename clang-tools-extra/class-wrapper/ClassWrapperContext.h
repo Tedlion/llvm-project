@@ -50,16 +50,40 @@ struct SymbolInfoKey {
 };
 #endif
 
-struct SymbolRecordEntry {
+class RefEntry {
+  friend class DeclEntry;
   std::string Name;
-  std::string FilePath;
-  tooling::Range CharRange;
   Decl::Kind Kind;
   StorageClass Storage = SC_Extern;
-  ExtendedODRHash::HashValue InfHash = ExtendedODRHash::HashValueInvalid;
-  ExtendedODRHash::HashValue ImplHash = ExtendedODRHash::HashValueInvalid;
+
+  // points to the SameRange of DeclEntry, only set when UsedAsFunctionPtr
+  tooling::Range Range;
+
+  bool UsedAsFunctionPtr = false;
+};
+
+
+class DeclEntry {
+  std::string Name;
+  std::string FilePath; // source file's path relative to SourceRoot
+  Decl::Kind Kind;
+  StorageClass Storage;
+
+  std::string Expansion;
+
+  // If the Expansion is empty, the following Ranges points to the sources;
+  // otherwise, the Ranges points to the Expansion.
+  tooling::Range NameRange;
+  tooling::Range InfRange;
+  tooling::Range ImplRange;
+
+  llvm::hash_code InfHash;
+  llvm::hash_code ImplHash;
+
+  bool IsDefinition;
   bool IsInline = false;
-  bool IsFuncPtr = false;
+  SmallVector<RefEntry, 4> InfRefs;  // the symbols used in the declaration
+  SmallVector<RefEntry, 4> ImplRefs; // the symbols used in the definition
 };
 
 struct SymbolInfo {
