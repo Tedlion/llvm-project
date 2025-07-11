@@ -9,8 +9,8 @@ set(LLVM_LINK_COMPONENTS
 add_custom_target(ClassWrapperUnitTests)
 
 add_unittest(ClassWrapperUnitTests ClassWrapperTests
-        DeclScannerTests.cpp)
-
+        DeclScannerTests.cpp
+        FileFilterTests.cpp)
 
 clang_target_link_libraries(ClassWrapperTests
         PRIVATE
@@ -25,6 +25,7 @@ clang_target_link_libraries(ClassWrapperTests
         clangTooling
         clangToolingCore
 )
+
 target_link_libraries(ClassWrapperTests
         PRIVATE
         classWrapper

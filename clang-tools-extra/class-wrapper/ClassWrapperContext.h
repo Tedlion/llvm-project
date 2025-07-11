@@ -84,6 +84,8 @@ class DeclEntry {
   bool IsInline = false;
   SmallVector<RefEntry, 4> InfRefs;  // the symbols used in the declaration
   SmallVector<RefEntry, 4> ImplRefs; // the symbols used in the definition
+
+
 };
 
 struct SymbolInfo {

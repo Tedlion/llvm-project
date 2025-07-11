@@ -1,0 +1,7 @@
+<component name="CopyrightManager">
+  <settings>
+    <module2copyright>
+      <element module="LLVM" copyright="LLVM" />
+    </module2copyright>
+  </settings>
+</component>

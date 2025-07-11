@@ -1,9 +1,3 @@
-/**
- * @brief
- * @authors tangwy
- * @date 2024/4/7
- */
-
 #include "FileFilter.h"
 
 #include "llvm/Support/Path.h"
@@ -16,6 +10,7 @@ std::string pathNormalize(const std::string &Path) {
   return std::filesystem::path(Path).lexically_normal().generic_string();
 }
 
+
 FileFilter::FileFilter(std::vector<std::string>::const_iterator FilesBegin,
                        std::vector<std::string>::const_iterator FilesEnd,
                        StringRef SrcRoot) {
@@ -23,10 +18,11 @@ FileFilter::FileFilter(std::vector<std::string>::const_iterator FilesBegin,
   auto SrcRootPath = std_path(SrcRoot.str());
   if (FilesBegin == FilesEnd) {
     auto Pattern = GlobPattern::create((SrcRootPath / "*").string());
-    if (Pattern){
+    if (Pattern) {
       FilePathPatterns.push_back(std::make_pair(Inclusive, Pattern.get()));
     } else {
-      llvm::errs() << "Invalid pattern: " << (SrcRootPath / "*").lexically_normal().generic_string() << "\n";
+      llvm::errs() << "Invalid pattern: " << (SrcRootPath / "*").
+          lexically_normal().generic_string() << "\n";
     }
     return;
   }
@@ -43,14 +39,16 @@ FileFilter::FileFilter(std::vector<std::string>::const_iterator FilesBegin,
       Path = Path.substr(1);
       Type = Exclusive;
     }
-    std::string PathStr = llvm::sys::path::is_absolute(Path)
-                              ? std_path(Path.str()).lexically_normal().generic_string()
-                              : (SrcRootPath / Path.str()).lexically_normal().generic_string();
+    std::string PathStr = sys::path::is_absolute(Path)
+                            ? std_path(Path.str()).lexically_normal().
+                            generic_string()
+                            : (SrcRootPath / Path.str()).lexically_normal().
+                            generic_string();
     auto Pattern = GlobPattern::create(PathStr);
-    if (Pattern){
-        FilePathPatterns.push_back(std::make_pair(Type, Pattern.get()));
-            } else {
-        llvm::errs() << "Invalid pattern: " << PathStr << "\n";
+    if (Pattern) {
+      FilePathPatterns.push_back(std::make_pair(Type, Pattern.get()));
+    } else {
+      llvm::errs() << "Invalid pattern: " << PathStr << "\n";
     }
   }
 }
