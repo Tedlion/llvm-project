@@ -25,12 +25,12 @@ using namespace llvm;
 
 namespace {
 class PairParser
-    : public llvm::cl::parser<std::pair<std::string, std::string>> {
+    : public cl::parser<std::pair<std::string, std::string>> {
 public:
-  using llvm::cl::parser<std::pair<std::string, std::string>>::parser;
+  using cl::parser<std::pair<std::string, std::string> >::parser;
 
-  bool parse(llvm::cl::Option &O, llvm::StringRef ArgName,
-             llvm::StringRef ArgValue,
+
+  bool parse(cl::Option &O, StringRef ArgName, StringRef ArgValue,
              std::pair<std::string, std::string> &Val) {
     size_t EqualsPos = ArgValue.find('=');
     if (EqualsPos == llvm::StringRef::npos) {
@@ -47,46 +47,44 @@ cl::OptionCategory ClassWrapperCategory("Class Wrapper Options");
 
 // We need SourceRoot to distinguish user symbol declarations and system
 // declarations.
-cl::opt<std::string> SourceRoot(cl::Positional, cl::Required,
-                                cl::value_desc("User sources root"),
-                                cl::desc("<src root>"),
-                                cl::cat(ClassWrapperCategory));
+cl::opt<std::string> SourceRoot(
+    cl::Positional, cl::Required, cl::value_desc("src_root"),
+    cl::desc("User sources root"), cl::cat(ClassWrapperCategory));
 
 cl::list<std::string> FilenameFilters(
     "f", cl::ZeroOrMore, cl::CommaSeparated, cl::value_desc("files_filters"),
     cl::desc("File filter rules.\n"
-             "Multiple file paths with wildcard characters are accepted.\n"
-             "File paths may be absolute or relative to the source root.\n"
-             "If a file path starts with '-', matched files will be excluded.\n"
-             "The behind rules override the front ones."),
+        "Multiple file paths with wildcard characters are accepted.\n"
+        "File paths may be absolute or relative to the source root.\n"
+        "If a file path starts with '-', matched files will be excluded.\n"
+        "The behind rules override the front ones."),
     cl::cat(ClassWrapperCategory));
 
 cl::list<std::pair<std::string, std::string>, bool, PairParser>
-    OptCompilationDatabase(
-        "p",
-        cl::desc("Compilation databases of one or more targets.\n"
-                 "e.g. <target1=database1> [target2=database2...]"),
-        cl::value_desc("target:database"), cl::OneOrMore, cl::Required,
-        cl::CommaSeparated, cl::cat(ClassWrapperCategory));
+OptCompilationDatabase(
+    "p", cl::OneOrMore, cl::CommaSeparated, cl::value_desc("target:database"),
+    cl::desc("Compilation databases of one or more targets.\n"
+        "e.g. <target1=database1> [target2=database2...]"),
+    cl::cat(ClassWrapperCategory));
 
-cl::opt<std::string> OutputDir("o", cl::desc("Output dictionary"),
-                               cl::value_desc("out_dir"), cl::Required,
+cl::opt<std::string> OutputDir("o", cl::Required, cl::value_desc("out_dir"),
+                               cl::desc("Output dictionary"),
                                cl::cat(ClassWrapperCategory));
 
 cl::list<std::string> NonWrappedFiles(
-    "non-wrapped",
-    cl::desc("Function/type declarations in given files will not be wrapped.\n"
+    "non-wrapped", cl::ZeroOrMore, cl::CommaSeparated,
+    cl::value_desc("non_wrapped_files"),
+    cl::desc("Function/type declarations in given files will NOT be "
+             "wrapped in class or namespace, and macros will Not be expanded.\n"
              "Differently from -f, non-wrapped files will be copied unchanged "
              "instead of being ignored."),
-    cl::value_desc("exclude_files"), cl::ZeroOrMore, cl::CommaSeparated,
     cl::cat(ClassWrapperCategory));
 
-cl::list<std::string>
-    ExtraArgs("extra-arg",
-              cl::desc("Additional arguments to append to the "
-                       "compilation command line."),
-              cl::value_desc("extra_args"), cl::ZeroOrMore, cl::CommaSeparated,
-              cl::cat(ClassWrapperCategory));
+cl::list<std::string> ExtraArgs(
+    "extra-arg",
+    cl::desc("Additional arguments to append to the compilation command line"),
+    cl::value_desc("extra_args"), cl::ZeroOrMore, cl::CommaSeparated,
+    cl::cat(ClassWrapperCategory));
 } // namespace
 
 
