@@ -4,6 +4,13 @@ add_clang_tool(class-wrapper
         ClassWrapperMain.cpp
 )
 
+if(MSVC)
+    target_compile_options(class-wrapper PRIVATE /Od /Zi)
+else()
+    target_compile_options(class-wrapper PRIVATE -O0 -g)
+endif()
+
+
 clang_target_link_libraries(class-wrapper
         PRIVATE
         clangAST

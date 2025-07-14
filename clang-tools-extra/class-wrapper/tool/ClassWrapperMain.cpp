@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "../ClassWrapperContext.h"
-#include "../DeclScanner.h"
+// #include "../DeclScanner.h"
 #include "../FileFilter.h"
 
 #include "clang/Tooling/CommonOptionsParser.h"
@@ -25,9 +25,9 @@ using namespace llvm;
 
 namespace {
 class PairParser
-    : public cl::parser<std::pair<std::string, std::string>> {
+    : public cl::basic_parser<std::pair<std::string, std::string>> {
 public:
-  using cl::parser<std::pair<std::string, std::string> >::parser;
+  using cl::basic_parser<std::pair<std::string, std::string> >::basic_parser;
 
 
   bool parse(cl::Option &O, StringRef ArgName, StringRef ArgValue,
@@ -41,18 +41,26 @@ public:
     Val.second = ArgValue.substr(EqualsPos + 1).str();
     return false;
   }
+
+  StringRef getValueName() const override {
+    return "key=value";
+  }
 };
 
 cl::OptionCategory ClassWrapperCategory("Class Wrapper Options");
 
 // We need SourceRoot to distinguish user symbol declarations and system
 // declarations.
-cl::opt<std::string> SourceRoot(
-    cl::Positional, cl::Required, cl::value_desc("src_root"),
-    cl::desc("User sources root"), cl::cat(ClassWrapperCategory));
+cl::opt<std::string> SourceRoot(cl::Positional, cl::Required,
+                                cl::desc("<src_root>"),
+                                cl::cat(ClassWrapperCategory));
+
+cl::opt<std::string> OutputDir(cl::Positional, cl::Required,
+                               cl::desc("<out_dir>"),
+                               cl::cat(ClassWrapperCategory));
 
 cl::list<std::string> FilenameFilters(
-    "f", cl::ZeroOrMore, cl::CommaSeparated, cl::value_desc("files_filters"),
+    "f", cl::OneOrMore, cl::CommaSeparated, cl::value_desc("files_filters"),
     cl::desc("File filter rules.\n"
         "Multiple file paths with wildcard characters are accepted.\n"
         "File paths may be absolute or relative to the source root.\n"
@@ -62,29 +70,31 @@ cl::list<std::string> FilenameFilters(
 
 cl::list<std::pair<std::string, std::string>, bool, PairParser>
 OptCompilationDatabase(
-    "p", cl::OneOrMore, cl::CommaSeparated, cl::value_desc("target:database"),
+    "p", cl::OneOrMore, cl::CommaSeparated, cl::value_desc("target=database"),
     cl::desc("Compilation databases of one or more targets.\n"
-        "e.g. <target1=database1> [target2=database2...]"),
+        "e.g. <target1=database1>[,target2=database2...]"),
     cl::cat(ClassWrapperCategory));
-
-cl::opt<std::string> OutputDir("o", cl::Required, cl::value_desc("out_dir"),
-                               cl::desc("Output dictionary"),
-                               cl::cat(ClassWrapperCategory));
 
 cl::list<std::string> NonWrappedFiles(
     "non-wrapped", cl::ZeroOrMore, cl::CommaSeparated,
-    cl::value_desc("non_wrapped_files"),
+    cl::value_desc("files"),
     cl::desc("Function/type declarations in given files will NOT be "
-             "wrapped in class or namespace, and macros will Not be expanded.\n"
+             "wrapped in class or namespace,\n"
+             " and macros will Not be expanded.\n"
              "Differently from -f, non-wrapped files will be copied unchanged "
              "instead of being ignored."),
     cl::cat(ClassWrapperCategory));
 
 cl::list<std::string> ExtraArgs(
-    "extra-arg",
-    cl::desc("Additional arguments to append to the compilation command line"),
-    cl::value_desc("extra_args"), cl::ZeroOrMore, cl::CommaSeparated,
+    "extra-arg", cl::ZeroOrMore, cl::CommaSeparated,
+    cl::value_desc("args"),
+    cl::desc("Additional compilation arguments to append"),
     cl::cat(ClassWrapperCategory));
+
+cl::opt<bool> ReScan("r", cl::init(false),
+    cl::desc("Re-scan all the source files.\n"
+             "Otherwise, only out-of-date files will be scanned."),
+             cl::cat(ClassWrapperCategory));
 } // namespace
 
 
@@ -103,34 +113,38 @@ int main(int argc, const char **argv) {
   IntrusiveRefCntPtr<vfs::FileSystem> FS = vfs::getRealFileSystem();
   IntrusiveRefCntPtr<FileManager> Files = new FileManager(FileSystemOptions(), FS);
   ClassWrapperContext Context(SourceRoot, SrcFilter, NonWrappedFilter, FS, Files);
-  llvm::outs() << "\n\nCompilation Databases: \n";
 
   for (const auto &[Target, DatabasePath] : OptCompilationDatabase) {
-    llvm::outs() << std::format("{}:{}\n", Target, DatabasePath);
+    llvm::outs() << std::format("Scan target {}({}):\n", Target, DatabasePath);
     std::string ErrorMessage;
-    auto Database = std::make_unique<ArgumentsAdjustingCompilations>(
-        CompilationDatabase::loadFromDirectory(DatabasePath, ErrorMessage));
-    for (const auto &Arg : ExtraArgs) {
-      Database->appendArgumentsAdjuster(getInsertArgumentAdjuster(Arg.data()));
-    }
 
-    if (!Database) {
+    auto Compilations = CompilationDatabase::loadFromDirectory(
+        DatabasePath, ErrorMessage);
+
+    if (!Compilations) {
       llvm::errs() << ErrorMessage << "\n";
       return 1;
     }
 
-    std::vector<std::string> ScanningFiles;
+    auto AdjustingCompilations = std::make_unique<
+      ArgumentsAdjustingCompilations>(std::move(Compilations));
 
-    for (auto Filepath : Database->getAllFiles()) {
-      if (SrcFilter.isMatched(Filepath) &&
-          !NonWrappedFilter.isMatched(Filepath)) {
-        ScanningFiles.push_back(Filepath);
+    for (const auto &Arg : ExtraArgs) {
+      AdjustingCompilations->appendArgumentsAdjuster(
+          getInsertArgumentAdjuster(Arg.data()));
+    }
+
+    // std::vector<std::string> ScanningFiles;
+
+    for (auto Filepath : AdjustingCompilations->getAllFiles()) {
+      if (SrcFilter.isMatched(Filepath) && !NonWrappedFilter.isMatched(Filepath)) {
+        // ScanningFiles.push_back(Filepath);
         llvm::outs() << Filepath << "\n";
       }
     }
 
     Context.setScanningTarget(Target);
-    runDeclScanner(*Database, ScanningFiles, Context);
+    // runDeclScanner(*Database, ScanningFiles, Context);
     llvm::outs() << "\n";
   }
 
