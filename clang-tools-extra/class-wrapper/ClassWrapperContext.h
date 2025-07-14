@@ -136,7 +136,7 @@ public:
 
   void setScanningTarget(StringRef Target) { ScanningTarget = Target; }
 
-  void recordSymbol(const SymbolRecordEntry &Entry);
+  //void recordSymbol(const SymbolRecordEntry &Entry);
 
   IntrusiveRefCntPtr<llvm::vfs::FileSystem> getBaseFS() const { return BaseFS; }
   IntrusiveRefCntPtr<FileManager> getFiles() const { return Files; }

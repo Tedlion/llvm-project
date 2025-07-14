@@ -5,14 +5,21 @@ set(LLVM_LINK_COMPONENTS
         FrontendOpenMP
 )
 
-add_definitions(-D_SILENCE_CXX23_ALIGNED_STORAGE_DEPRECATION_WARNING)
+#add_definitions(-D_SILENCE_CXX23_ALIGNED_STORAGE_DEPRECATION_WARNING)
 
 add_clang_library(classWrapper
-        DeclScanner.cpp
+#        DeclScanner.cpp
         FileFilter.cpp
         ClassWrapperContext.cpp
-        ExtendedODRHash.cpp
+#        ExtendedODRHash.cpp
 )
+
+if(MSVC)
+    target_compile_options(classWrapper PRIVATE /Od /Zi)
+else()
+    target_compile_options(classWrapper PRIVATE -O0 -g)
+endif()
+
 
 clang_target_link_libraries(classWrapper
         PRIVATE
