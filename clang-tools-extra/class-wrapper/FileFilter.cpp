@@ -11,12 +11,12 @@ std::string pathNormalize(const std::string &Path) {
 }
 
 
-FileFilter::FileFilter(std::vector<std::string>::const_iterator FilesBegin,
-                       std::vector<std::string>::const_iterator FilesEnd,
+FileFilter::FileFilter(std::vector<std::string>::const_iterator RuleBegin,
+                       std::vector<std::string>::const_iterator RuleEnd,
                        StringRef SrcRoot) {
   using std_path = std::filesystem::path;
   auto SrcRootPath = std_path(SrcRoot.str());
-  if (FilesBegin == FilesEnd) {
+  if (RuleBegin == RuleEnd) {
     auto Pattern = GlobPattern::create((SrcRootPath / "*").string());
     if (Pattern) {
       FilePathPatterns.push_back(std::make_pair(Inclusive, Pattern.get()));
@@ -27,7 +27,7 @@ FileFilter::FileFilter(std::vector<std::string>::const_iterator FilesBegin,
     return;
   }
 
-  for (auto I = FilesBegin; I != FilesEnd; ++I) {
+  for (auto I = RuleBegin; I != RuleEnd; ++I) {
     StringRef Path = *I;
     if (Path.empty())
       continue;

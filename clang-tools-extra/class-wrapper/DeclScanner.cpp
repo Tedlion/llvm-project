@@ -256,6 +256,7 @@ public:
 std::unique_ptr<MatchFinder> newDeclScannerMatchFinderFactory(
     const NeedToWrapFunc &NeedToWrap, const RecordSymbolFunc &RecordSymbol,
     const std::shared_ptr<ExtendedODRHash::ODRHashCache> & TypeHashCache) {
+
   class DeclScannerMatchFinder : public MatchFinder {
   private:
     const NeedToWrapFunc MNeedToWrap;
@@ -296,21 +297,23 @@ std::unique_ptr<MatchFinder> newDeclScannerMatchFinderFactory(
                                                   TypeHashCache);
 }
 
-void runDeclScanner(const CompilationDatabase &Compilations,
-                    const llvm::ArrayRef<std::string> SourcePaths,
-                    ClassWrapperContext &Context) {
-  ClangTool Tool(Compilations, SourcePaths,
+
+void runDeclScanner(StringRef Target, StringRef Filename,
+                    const CompilationDatabase &Compilations,
+                    const ClassWrapperContext &Context) {
+  ClangTool Tool(Compilations, Filename.str(),
                  std::make_shared<PCHContainerOperations>(),
                  Context.getBaseFS(), Context.getFiles());
 
-  NeedToWrapFunc NeedToWrap = [&Context](const StringRef &FileName) {
-    return Context.needToWrap(FileName);
-  };
 
-  auto RecordSymbol =
-      std::bind_front(&ClassWrapperContext::recordSymbol, Context);
-
-  auto HashCache = std::make_shared<ExtendedODRHash::ODRHashCache>();
+  // NeedToWrapFunc NeedToWrap = [&Context](const StringRef &FileName) {
+  //   return Context.needToWrap(FileName);
+  // };
+  //
+  // auto RecordSymbol =
+  //     std::bind_front(&ClassWrapperContext::recordSymbol, Context);
+  //
+  // auto HashCache = std::make_shared<ExtendedODRHash::ODRHashCache>();
 
   class ScannerSourceFileCallback : public SourceFileCallbacks {
   private:

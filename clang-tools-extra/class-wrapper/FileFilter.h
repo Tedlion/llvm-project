@@ -18,8 +18,8 @@ extern std::string pathNormalize(const std::string &Path);
 
 class FileFilter {
 public:
-  FileFilter(std::vector<std::string>::const_iterator FilesBegin,
-             std::vector<std::string>::const_iterator FilesEnd,
+  FileFilter(std::vector<std::string>::const_iterator RuleBegin,
+             std::vector<std::string>::const_iterator RuleEnd,
              StringRef SrcRoot);
 
   bool isMatched(StringRef Path) const;

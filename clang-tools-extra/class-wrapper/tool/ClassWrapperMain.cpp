@@ -7,19 +7,24 @@
 //===----------------------------------------------------------------------===//
 
 #include "../ClassWrapperContext.h"
-// #include "../DeclScanner.h"
+#include "../DeclScanner.h"
 #include "../FileFilter.h"
 
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Parallel.h"
 #include "llvm/Support/Signals.h"
+#include "llvm/Support/ThreadPool.h"
 
+#include <filesystem>
 #include <format>
+#include <thread>
+
 using namespace clang;
-using namespace clang::tooling;
 using namespace clang::class_wrapper;
+using namespace clang::tooling;
 using namespace llvm;
 
 
@@ -95,6 +100,11 @@ cl::opt<bool> ReScan("r", cl::init(false),
     cl::desc("Re-scan all the source files.\n"
              "Otherwise, only out-of-date files will be scanned."),
              cl::cat(ClassWrapperCategory));
+
+cl::opt<unsigned> Parallel(
+    "j", cl::init(1),
+    cl::desc("Parallel jobs count, default: 1\n"),
+    cl::cat(ClassWrapperCategory));
 } // namespace
 
 
@@ -102,17 +112,28 @@ int main(int argc, const char **argv) {
   sys::PrintStackTraceOnErrorSignal(argv[0]);
   cl::HideUnrelatedOptions(ClassWrapperCategory);
 
-  if (!cl::ParseCommandLineOptions(argc, argv)) {
+  if (!cl::ParseCommandLineOptions(argc, argv))
     return 1;
-  }
 
   FileFilter SrcFilter(FilenameFilters.begin(), FilenameFilters.end(),
                        SourceRoot);
   FileFilter NonWrappedFilter(NonWrappedFiles.begin(), NonWrappedFiles.end(),
                               SourceRoot);
+
+  if (Parallel == 0) {
+    parallel::strategy.ThreadsRequested = std::thread::hardware_concurrency();
+  } else {
+    parallel::strategy.ThreadsRequested =
+        std::min(Parallel.getValue(), std::thread::hardware_concurrency());
+  }
+
   IntrusiveRefCntPtr<vfs::FileSystem> FS = vfs::getRealFileSystem();
   IntrusiveRefCntPtr<FileManager> Files = new FileManager(FileSystemOptions(), FS);
-  ClassWrapperContext Context(SourceRoot, SrcFilter, NonWrappedFilter, FS, Files);
+
+  ClassWrapperContext Context(SourceRoot, OutputDir, SrcFilter,
+                              NonWrappedFilter, FS, Files);
+
+  parallel::TaskGroup Tasks;
 
   for (const auto &[Target, DatabasePath] : OptCompilationDatabase) {
     llvm::outs() << std::format("Scan target {}({}):\n", Target, DatabasePath);
@@ -134,19 +155,28 @@ int main(int argc, const char **argv) {
           getInsertArgumentAdjuster(Arg.data()));
     }
 
-    // std::vector<std::string> ScanningFiles;
+    for (auto & Filename : AdjustingCompilations->getAllFiles()) {
+      if (!SrcFilter.isMatched(Filename))
+        continue;
 
-    for (auto Filepath : AdjustingCompilations->getAllFiles()) {
-      if (SrcFilter.isMatched(Filepath) && !NonWrappedFilter.isMatched(Filepath)) {
-        // ScanningFiles.push_back(Filepath);
-        llvm::outs() << Filepath << "\n";
-      }
+      using std::filesystem::path;
+      using std::filesystem::relative;
+      auto RelativePath = relative(path(Filename), path(SourceRoot.getValue()));
+      // ScanningFiles.push_back(Filepath);
+      llvm::outs() << RelativePath.generic_string() << "\n";
+
+      Tasks.spawn([&] {
+        runDeclScanner(Target, Filename, *AdjustingCompilations, Context);
+      });
     }
 
     Context.setScanningTarget(Target);
     // runDeclScanner(*Database, ScanningFiles, Context);
     llvm::outs() << "\n";
   }
+
+  Tasks.sync();
+
 
   return 0;
 }
