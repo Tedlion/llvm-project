@@ -50,44 +50,6 @@ struct SymbolInfoKey {
 };
 #endif
 
-class RefEntry {
-  friend class DeclEntry;
-  std::string Name;
-  Decl::Kind Kind;
-  StorageClass Storage = SC_Extern;
-
-  // points to the SameRange of DeclEntry, only set when UsedAsFunctionPtr
-  tooling::Range Range;
-
-  bool UsedAsFunctionPtr = false;
-};
-
-
-class DeclEntry {
-  std::string Name;
-  std::string FilePath; // source file's path relative to SourceRoot
-  Decl::Kind Kind;
-  StorageClass Storage;
-
-  std::string Expansion;
-
-  // If the Expansion is empty, the following Ranges points to the sources;
-  // otherwise, the Ranges points to the Expansion.
-  tooling::Range NameRange;
-  tooling::Range InfRange;
-  tooling::Range ImplRange;
-
-  llvm::hash_code InfHash;
-  llvm::hash_code ImplHash;
-
-  bool IsDefinition;
-  bool IsInline = false;
-  SmallVector<RefEntry, 4> InfRefs;  // the symbols used in the declaration
-  SmallVector<RefEntry, 4> ImplRefs; // the symbols used in the definition
-
-
-};
-
 struct SymbolInfo {
   StringRef Target;
 
@@ -107,18 +69,22 @@ struct SymbolInfo {
   std::string NewName; // use old name if empty
 };
 
+
 class ClassWrapperContext {
 public:
-  ClassWrapperContext(const std::string &SourceRoot,
+  ClassWrapperContext(const Twine &SourceRoot, const Twine &TargetRoot,
                       const llvm::FileFilter &SrcFilter,
                       const llvm::FileFilter &NonWrappedFilter,
                       IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS,
                       IntrusiveRefCntPtr<FileManager> Files)
-      : SourceRoot(llvm::pathNormalize(SourceRoot)), SrcFilter(SrcFilter),
-        NonWrappedFilter(NonWrappedFilter), BaseFS(std::move(FS)),
-        Files(std::move(Files)) {}
+    : SourceRoot(llvm::pathNormalize(SourceRoot.str())),
+      TargetRoot(llvm::pathNormalize(TargetRoot.str())),
+      SrcFilter(SrcFilter), NonWrappedFilter(NonWrappedFilter),
+      BaseFS(std::move(FS)), Files(std::move(Files)) {
+  }
 
   const std::string SourceRoot;
+  const std::string TargetRoot;
   const llvm::FileFilter &SrcFilter;
   const llvm::FileFilter &NonWrappedFilter;
 
