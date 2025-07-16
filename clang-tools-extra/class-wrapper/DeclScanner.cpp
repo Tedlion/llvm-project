@@ -13,6 +13,8 @@
 #include "clang/Tooling/Tooling.h"
 #include "clang/Tooling/Transformer/SourceCode.h"
 
+#include <filesystem>
+
 namespace clang::class_wrapper {
 
 namespace {
@@ -44,9 +46,30 @@ namespace {
 //  return HashValue;
 //}
 
-
-
 } // namespace
+
+
+const Matcher<Decl> DeclScanner::TypedefDeclMatcher =
+    traverse(TK_IgnoreUnlessSpelledInSource, typedefDecl().bind(TypedefDeclID));
+const Matcher<Decl> DeclScanner::RecordDeclMatcher =
+    traverse(TK_IgnoreUnlessSpelledInSource, recordDecl().bind(RecordDeclID));
+const Matcher<Decl> DeclScanner::EnumDeclMatcher =
+    traverse(TK_IgnoreUnlessSpelledInSource, enumDecl().bind(EnumDeclID));
+const Matcher<Decl> DeclScanner::VarDeclMatcher =
+    traverse(TK_IgnoreUnlessSpelledInSource, varDecl().bind(VarDeclID));
+const Matcher<Decl> DeclScanner::FunctionDeclMatcher =
+    traverse(TK_IgnoreUnlessSpelledInSource,
+             functionDecl().bind(FunctionDeclID));
+const Matcher<Stmt> DeclScanner::DeclStmtMatcher =
+    traverse(TK_IgnoreUnlessSpelledInSource, declStmt().bind(DeclStmtID));
+const Matcher<Stmt> DeclScanner::DeclRefExprMatcher =
+    traverse(TK_IgnoreUnlessSpelledInSource, declRefExpr().bind(DeclRefExprID));
+
+
+DeclEntry::DeclEntry(const MatchFinder::MatchResult &Result, const RecordDecl & RD) {
+
+}
+
 
 template <typename NodeType>
 concept PrettyDumpNode =
@@ -56,6 +79,7 @@ concept PrettyDumpNode =
 
 template <typename MatcherHandler, typename NodeType, auto bindName>
 class ScannerMatcherHandler : public MatchFinder::MatchCallback {
+  DeclScanner &Scanner;
 public:
   ScannerMatcherHandler(const NeedToWrapFunc &NeedToWrap,
                         const RecordSymbolFunc &RecordSymbol,
@@ -68,6 +92,8 @@ public:
     if (!Node) {
       return;
     }
+
+
 
     StringRef FileName = Result.SourceManager->getFilename(Node->getBeginLoc());
     if (!NeedToWrap(FileName)) {
@@ -89,7 +115,6 @@ public:
 
   const NeedToWrapFunc &NeedToWrap;
   const RecordSymbolFunc &RecordSymbol;
-  ExtendedODRHash::ODRHashCache &TypeHashCache;
 };
 
 class TypedefDeclHandler
@@ -298,13 +323,37 @@ std::unique_ptr<MatchFinder> newDeclScannerMatchFinderFactory(
 }
 
 
-void runDeclScanner(StringRef Target, StringRef Filename,
+DeclScanner::DeclScanner(StringRef Target, ArrayRef<std::string> Filenames,
+                         const ClassWrapperContext &Context)
+  : Context(Context), Target(Target),
+    SourcePaths(Filenames.begin(), Filenames.end()),
+    RecordDeclHandler(*this) {
+  Finder.addMatcher(RecordDeclMatcher, &RecordDeclHandler);
+}
+
+
+bool DeclScanner::handleBeginSource(CompilerInstance &CI) {
+  CurrentFilePath = CI.getSourceManager().getFileEntryForID(
+      CI.getSourceManager().getMainFileID())->tryGetRealPathName();
+  using namespace std::filesystem;
+  RelativeCurrentFilePath = relative(path(CurrentFilePath),
+                                     path(Context.SourceRoot)).generic_string();
+  return true;
+}
+
+
+void DeclScanner::handleEndSource() {
+  // TODO: write to files
+}
+
+
+void DeclScanner::run(StringRef Target, ArrayRef<std::string> Filenames,
                     const CompilationDatabase &Compilations,
                     const ClassWrapperContext &Context) {
-  ClangTool Tool(Compilations, Filename.str(),
+  ClangTool Tool(Compilations, Filenames,
                  std::make_shared<PCHContainerOperations>(),
                  Context.getBaseFS(), Context.getFiles());
-
+  DeclScanner Scanner(Target, Filenames, Context);
 
   // NeedToWrapFunc NeedToWrap = [&Context](const StringRef &FileName) {
   //   return Context.needToWrap(FileName);
@@ -315,22 +364,22 @@ void runDeclScanner(StringRef Target, StringRef Filename,
   //
   // auto HashCache = std::make_shared<ExtendedODRHash::ODRHashCache>();
 
-  class ScannerSourceFileCallback : public SourceFileCallbacks {
-  private:
-    std::shared_ptr<ExtendedODRHash::ODRHashCache> TypeHashCache;
+  // class ScannerSourceFileCallback : public SourceFileCallbacks {
+  // private:
+  //   std::shared_ptr<ExtendedODRHash::ODRHashCache> TypeHashCache;
+  //
+  // public:
+  //   ScannerSourceFileCallback(std::shared_ptr<ExtendedODRHash::ODRHashCache>& Cache)
+  //       : TypeHashCache(Cache) {}
+  //
+  //   void handleEndSource() override { TypeHashCache->clear(); }
+  // };
+  //
+  // auto Finder =
+  //     newDeclScannerMatchFinderFactory(NeedToWrap, RecordSymbol, HashCache);
+  // auto SourceCallBack = std::make_unique<ScannerSourceFileCallback>(HashCache);
 
-  public:
-    ScannerSourceFileCallback(std::shared_ptr<ExtendedODRHash::ODRHashCache>& Cache)
-        : TypeHashCache(Cache) {}
-
-    void handleEndSource() override { TypeHashCache->clear(); }
-  };
-
-  auto Finder =
-      newDeclScannerMatchFinderFactory(NeedToWrap, RecordSymbol, HashCache);
-  auto SourceCallBack = std::make_unique<ScannerSourceFileCallback>(HashCache);
-
-  Tool.run(newFrontendActionFactory(Finder.get(), SourceCallBack.get()).get());
+  Tool.run(newFrontendActionFactory(&Scanner.Finder, &Scanner).get());
 }
 
 } // namespace clang::class_wrapper
