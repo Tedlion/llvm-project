@@ -166,7 +166,7 @@ int main(int argc, const char **argv) {
       llvm::outs() << RelativePath.generic_string() << "\n";
 
       Tasks.spawn([&] {
-        runDeclScanner(Target, Filename, *AdjustingCompilations, Context);
+        DeclScanner::run(Target, Filename, *AdjustingCompilations, Context);
       });
     }
 
