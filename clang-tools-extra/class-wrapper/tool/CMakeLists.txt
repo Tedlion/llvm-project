@@ -10,6 +10,8 @@ else()
     target_compile_options(class-wrapper PRIVATE -O0 -g)
 endif()
 
+target_compile_definitions(class-wrapper PRIVATE _SILENCE_CXX23_ALIGNED_UNION_DEPRECATION_WARNING)
+
 
 clang_target_link_libraries(class-wrapper
         PRIVATE

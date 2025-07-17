@@ -5,10 +5,8 @@
  */
 
 #include "DeclScanner.h"
-#include "ExtendedODRHash.h"
 #include "Support.h"
 
-#include "clang/AST/ODRHash.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/Tooling/Tooling.h"
 #include "clang/Tooling/Transformer/SourceCode.h"
@@ -16,38 +14,6 @@
 #include <filesystem>
 
 namespace clang::class_wrapper {
-
-namespace {
-
-//unsigned getRecordDeclHash(const RecordDecl &RD) {
-//  ODRHash Hash;
-//  Hash.AddRecordDecl(&RD);
-//  for (const auto *Attr : RD.attrs()) {
-//    Hash.AddIdentifierInfo(Attr->getAttrName());
-//  }
-//  for (const auto *Field : RD.fields()) {
-//    QualType FieldType = Field->getType();
-//    if (FieldType->isRecordType()) {
-//      const Type *TypePtr = FieldType.getCanonicalType().getTypePtr();
-//      TypePtr->dump();
-//      assert(TypeHashMap.contains(TypePtr));
-//      Hash.AddStructuralValue(
-//          clang::APValue(llvm::APSInt(TypeHashMap[TypePtr])));
-//    }
-//  }
-//
-//  unsigned HashValue = Hash.CalculateHash();
-//  const Type *SelfType = RD.getTypeForDecl();
-//  assert(SelfType);
-//  assert(!TypeHashMap.contains(SelfType));
-//  SelfType->dump();
-//  TypeHashMap[SelfType] = HashValue;
-//  llvm::errs() << std::format("{} \n", (void *)SelfType);
-//  return HashValue;
-//}
-
-} // namespace
-
 
 const Matcher<Decl> DeclScanner::TypedefDeclMatcher =
     traverse(TK_IgnoreUnlessSpelledInSource, typedefDecl().bind(TypedefDeclID));
@@ -66,16 +32,91 @@ const Matcher<Stmt> DeclScanner::DeclRefExprMatcher =
     traverse(TK_IgnoreUnlessSpelledInSource, declRefExpr().bind(DeclRefExprID));
 
 
-DeclEntry::DeclEntry(const MatchFinder::MatchResult &Result, const RecordDecl & RD) {
-
-}
-
 
 template <typename NodeType>
 concept PrettyDumpNode =
-    requires(const NodeType &Node, const ASTContext &Context) {
+    requires(const NodeType &Node, const ASTContext &Context)
+    {
       Node.dumpPretty(Context);
     };
+
+
+static Range getRangeFromChar(const CharSourceRange &CSR,
+                              const SourceManager &SM) {
+  unsigned Begin = SM.getFileOffset(CSR.getBegin());
+  unsigned End = SM.getFileOffset(CSR.getEnd());
+  return Range(SM.getFileOffset(CSR.getBegin()), End - Begin);
+}
+
+
+static hash_code getTokenHash(CharSourceRange SCR, const SourceManager &SM,
+                              const CompilerInstance &CI) {
+  hash_code Hash(0);
+
+  Token Tok;
+  std::string TokensStr;
+  bool ReachedEnd = false;
+  Preprocessor &PP = CI.getPreprocessor();
+  SourceLocation Begin = SCR.getBegin();
+  SourceLocation End = SCR.getEnd();
+
+  PP.EnterSourceFile(SM.getFileID(Begin), nullptr, Begin);
+
+  while (!ReachedEnd) {
+    PP.Lex(Tok);
+    if (Tok.is(tok::eof) || SM.isBeforeInTranslationUnit(End, Tok.getLocation()))
+      break;
+    if (Tok.getLocation() == End)
+      ReachedEnd = true;
+    TokensStr += PP.getSpelling(Tok);
+    TokensStr += " ";
+  }
+
+  llvm::errs() << "Tokens: " << TokensStr << "\n";
+
+  return Hash;
+}
+
+
+DeclEntry::DeclEntry(const MatchFinder::MatchResult &Result,
+                     const RecordDecl &RD, const CompilerInstance &CI) {
+  const SourceManager& SM = *Result.SourceManager;
+
+  Name = RD.getName().str();
+  FilePath = SM.getFilename(RD.getBeginLoc()).str();
+  Kind = RD.getKind();
+  Storage = SC_None;
+
+  RD.dump();
+  RD.getSourceRange().print(llvm::errs(), SM);
+  // TODO
+  llvm::errs() << "0\n";
+
+  if (const auto *Id = RD.getIdentifier()) {
+    SourceLocation NameLoc = RD.getLocation();
+    llvm::errs() << "1\n";
+    unsigned NameBegin = SM.getFileOffset(NameLoc);
+    llvm::errs() << "2\n";
+    NameRange = Range(NameBegin, Id->getLength());
+  } else {
+    isAnonymous = true;
+  }
+
+  llvm::errs() << "3\n";
+
+  CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
+  FullRange = getRangeFromChar(AssociatedRange, SM);
+
+  //getTokenHash(AssociatedRange, SM, CI);
+}
+
+
+void DeclScanner::PostHandleNode(const MatchFinder::MatchResult &Result,
+                                 const RecordDecl &RD, DeclEntry &Entry) {
+
+}
+
+#if 0
 
 template <typename MatcherHandler, typename NodeType, auto bindName>
 class ScannerMatcherHandler : public MatchFinder::MatchCallback {
@@ -87,7 +128,7 @@ public:
       : NeedToWrap(NeedToWrap), RecordSymbol(RecordSymbol),
         TypeHashCache(Cache) {}
 
-  virtual void run(const MatchFinder::MatchResult &Result) override {
+  void run(const MatchFinder::MatchResult &Result) override {
     const auto *Node = Result.Nodes.getNodeAs<NodeType>(bindName);
     if (!Node) {
       return;
@@ -128,20 +169,6 @@ public:
 
     CharSourceRange FullRange = getAssociatedRange(TD, *Result.Context);
     llvm::errs() << getText(FullRange, *Result.Context) << "\n";
-
-    // TODO: check if the underlying is a RecordDecl or EnumDecl
-    //  Deletion the old code redundantly is fine, but be care of the insertion action
-
-    //    clang::QualType AliasedType = TD.getUnderlyingType();
-    //    ODRHash Hash;
-    //    Hash.AddQualType(AliasedType);
-    //    Hash.AddType(AliasedType.getTypePtr());
-    //    auto HashValue = Hash.CalculateHash();
-    //    llvm::errs() << std::format("{}:0x{:x}\n", TD.getName().data(),
-    //    HashValue);
-
-    //    Context.recordSymbol(TD.getName(), FullRange, TD.getKind(),
-    //                         TD, 0, std::nullopt, false, false);
   }
 };
 
@@ -191,136 +218,7 @@ public:
   }
 };
 
-class EnumDeclHandler
-    : public ScannerMatcherHandler<EnumDeclHandler, EnumDecl, EnumDeclStr> {
-  using ScannerMatcherHandler::ScannerMatcherHandler;
-
-public:
-  void run(const MatchFinder::MatchResult &Result, const EnumDecl &ED) {
-    debugDump(Result, ED);
-    // TODO
-  }
-};
-
-class VarDeclHandler
-    : public ScannerMatcherHandler<VarDeclHandler, VarDecl, VarDeclStr> {
-public:
-  using ScannerMatcherHandler::ScannerMatcherHandler;
-
-  void run(const MatchFinder::MatchResult &Result, const VarDecl &VD) {
-    if (VD.hasLocalStorage()) {
-      return;
-    }
-
-    debugDump(Result, VD);
-    auto RangeStr = VD.getSourceRange().printToString(*Result.SourceManager);
-    // TODO
-  }
-};
-
-class FunctionDeclHandler
-    : public ScannerMatcherHandler<FunctionDeclHandler, FunctionDecl,
-                                   FunctionDeclStr> {
-public:
-  using ScannerMatcherHandler::ScannerMatcherHandler;
-
-  void run(const MatchFinder::MatchResult &Result, const FunctionDecl &FD) {
-    // FIXME:
-//    unsigned ODRHash = getDeclHash(FD);
-//    llvm::errs() << std::format("{}:0x{:x}\n", FD.getType().getAsString(),
-//                                ODRHash);
-//    std::optional<unsigned> ImplHash = std::nullopt;
-//    if (FD.hasBody()) {
-//      Stmt *Body = FD.getBody();
-//      class ODRHash Hash;
-//
-//      Hash.AddStmt(Body);
-//      ImplHash = Hash.CalculateHash();
-//      //        llvm::errs() << std::format("BodyHash :0x{:x}\n",
-//      //        ImplHash.value());
-//    }
-//    debugDump(Result, FD);
-//    CharSourceRange FullRange = getAssociatedRange(FD, *Result.Context);
-//    llvm::errs() << getText(FullRange, *Result.Context) << "\n";
-//    RecordSymbol(FD.getName(), FullRange, FD.getKind(),
-//                         FD.getStorageClass(), ODRHash, ImplHash,
-//                         FD.isInlineSpecified(), false);
-  }
-
-  static unsigned getDeclHash(const FunctionDecl &FD) {
-    class ODRHash Hash;
-    QualType DeclType = FD.getType(); // return type & param types
-    Hash.AddQualType(DeclType);
-    Hash.AddBoolean(FD.isStatic());
-    return Hash.CalculateHash();
-  }
-};
-
-class DeclStmtHandler
-    : public ScannerMatcherHandler<DeclStmtHandler, DeclStmt, DeclStmtStr> {
-public:
-  using ScannerMatcherHandler::ScannerMatcherHandler;
-
-  void run(const MatchFinder::MatchResult &Result, const DeclStmt &DS) {
-    debugDump(Result, DS);
-    // TODO
-  }
-};
-
-class DeclRefHandler : public ScannerMatcherHandler<DeclRefHandler, DeclRefExpr,
-                                                    DeclRefExprStr> {
-public:
-  using ScannerMatcherHandler::ScannerMatcherHandler;
-
-  void run(const MatchFinder::MatchResult &Result, const DeclRefExpr &DRE) {
-    debugDump(Result, DRE);
-    // TODO
-  }
-};
-
-std::unique_ptr<MatchFinder> newDeclScannerMatchFinderFactory(
-    const NeedToWrapFunc &NeedToWrap, const RecordSymbolFunc &RecordSymbol,
-    const std::shared_ptr<ExtendedODRHash::ODRHashCache> & TypeHashCache) {
-
-  class DeclScannerMatchFinder : public MatchFinder {
-  private:
-    const NeedToWrapFunc MNeedToWrap;
-    const RecordSymbolFunc MRecordSymbol;
-    std::shared_ptr<ExtendedODRHash::ODRHashCache> MTypeHashCache;
-    TypedefDeclHandler TypedefDeclHandler;
-    RecordDeclHandler RecordDeclHandler;
-    EnumDeclHandler EnumDeclHandler;
-    FunctionDeclHandler FunctionDeclHandler;
-    VarDeclHandler VarDeclHandler;
-    DeclStmtHandler DeclStmtHandler;
-    DeclRefHandler DeclRefHandler;
-
-  public:
-    DeclScannerMatchFinder(
-        const NeedToWrapFunc &NeedToWrap, const RecordSymbolFunc &RecordSymbol,
-        const std::shared_ptr<ExtendedODRHash::ODRHashCache> &TypeHashCache)
-        : MNeedToWrap(NeedToWrap), MRecordSymbol(RecordSymbol),
-          MTypeHashCache(TypeHashCache),
-          TypedefDeclHandler(MNeedToWrap, MRecordSymbol, *MTypeHashCache),
-          RecordDeclHandler(MNeedToWrap, MRecordSymbol, *MTypeHashCache),
-          EnumDeclHandler(MNeedToWrap, MRecordSymbol, *MTypeHashCache),
-          FunctionDeclHandler(MNeedToWrap, MRecordSymbol, *MTypeHashCache),
-          VarDeclHandler(MNeedToWrap, MRecordSymbol, *MTypeHashCache),
-          DeclStmtHandler(MNeedToWrap, MRecordSymbol, *MTypeHashCache),
-          DeclRefHandler(MNeedToWrap, MRecordSymbol, *MTypeHashCache) {
-      addMatcher(TypedefDeclMatcher, &TypedefDeclHandler);
-      addMatcher(RecordDeclMatcher, &RecordDeclHandler);
-      addMatcher(EnumDeclMatcher, &EnumDeclHandler);
-      addMatcher(FunctionDeclMatcher, &FunctionDeclHandler);
-      addMatcher(VarDeclMatcher, &VarDeclHandler);
-      addMatcher(DeclStmtMatcher, &DeclStmtHandler);
-      addMatcher(DeclRefExprMatcher, &DeclRefHandler);
-    }
-  };
-
-  return std::make_unique<DeclScannerMatchFinder>(NeedToWrap, RecordSymbol,
-                                                  TypeHashCache);
-}
+#endif
 
 
 DeclScanner::DeclScanner(StringRef Target, ArrayRef<std::string> Filenames,
@@ -333,11 +231,14 @@ DeclScanner::DeclScanner(StringRef Target, ArrayRef<std::string> Filenames,
 
 
 bool DeclScanner::handleBeginSource(CompilerInstance &CI) {
+  CompilerInstancePtr = &CI;
+
   CurrentFilePath = CI.getSourceManager().getFileEntryForID(
       CI.getSourceManager().getMainFileID())->tryGetRealPathName();
   using namespace std::filesystem;
   RelativeCurrentFilePath = relative(path(CurrentFilePath),
                                      path(Context.SourceRoot)).generic_string();
+
   return true;
 }
 
@@ -354,30 +255,6 @@ void DeclScanner::run(StringRef Target, ArrayRef<std::string> Filenames,
                  std::make_shared<PCHContainerOperations>(),
                  Context.getBaseFS(), Context.getFiles());
   DeclScanner Scanner(Target, Filenames, Context);
-
-  // NeedToWrapFunc NeedToWrap = [&Context](const StringRef &FileName) {
-  //   return Context.needToWrap(FileName);
-  // };
-  //
-  // auto RecordSymbol =
-  //     std::bind_front(&ClassWrapperContext::recordSymbol, Context);
-  //
-  // auto HashCache = std::make_shared<ExtendedODRHash::ODRHashCache>();
-
-  // class ScannerSourceFileCallback : public SourceFileCallbacks {
-  // private:
-  //   std::shared_ptr<ExtendedODRHash::ODRHashCache> TypeHashCache;
-  //
-  // public:
-  //   ScannerSourceFileCallback(std::shared_ptr<ExtendedODRHash::ODRHashCache>& Cache)
-  //       : TypeHashCache(Cache) {}
-  //
-  //   void handleEndSource() override { TypeHashCache->clear(); }
-  // };
-  //
-  // auto Finder =
-  //     newDeclScannerMatchFinderFactory(NeedToWrap, RecordSymbol, HashCache);
-  // auto SourceCallBack = std::make_unique<ScannerSourceFileCallback>(HashCache);
 
   Tool.run(newFrontendActionFactory(&Scanner.Finder, &Scanner).get());
 }

@@ -8,7 +8,6 @@
 #define CLASSWRAPPERCONTEXT_H
 
 #include "FileFilter.h"
-#include "ExtendedODRHash.h"
 
 #include "clang/AST/Decl.h"
 #include "clang/Basic/FileManager.h"
@@ -48,7 +47,6 @@ struct SymbolInfoKey {
 
   auto operator<=>(const SymbolInfoKey &) const = default;
 };
-#endif
 
 struct SymbolInfo {
   StringRef Target;
@@ -68,6 +66,7 @@ struct SymbolInfo {
   // Decision made
   std::string NewName; // use old name if empty
 };
+#endif
 
 
 class ClassWrapperContext {
@@ -120,12 +119,14 @@ private:
     }
   };
 
+#if 0
   StringMap<
       std::map<RecordRange, SmallVector<SymbolInfo, 4>, ReplacementRangeComparator>>
       DeclSymbols;
   StringSet<> UsedSymbolName;
 
   Replacements Replaces;
+#endif
 
   IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS;
   IntrusiveRefCntPtr<FileManager> Files;

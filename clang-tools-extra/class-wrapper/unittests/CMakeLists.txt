@@ -12,6 +12,8 @@ add_unittest(ClassWrapperUnitTests ClassWrapperTests
         DeclScannerTests.cpp
         FileFilterTests.cpp)
 
+target_compile_definitions(ClassWrapperTests PRIVATE _SILENCE_CXX23_ALIGNED_UNION_DEPRECATION_WARNING)
+
 clang_target_link_libraries(ClassWrapperTests
         PRIVATE
         clangAnalysis

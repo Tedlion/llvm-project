@@ -8,11 +8,12 @@ set(LLVM_LINK_COMPONENTS
 #add_definitions(-D_SILENCE_CXX23_ALIGNED_STORAGE_DEPRECATION_WARNING)
 
 add_clang_library(classWrapper
-#        DeclScanner.cpp
+        DeclScanner.cpp
         FileFilter.cpp
         ClassWrapperContext.cpp
-#        ExtendedODRHash.cpp
 )
+
+target_compile_definitions(classWrapper PRIVATE _SILENCE_CXX23_ALIGNED_UNION_DEPRECATION_WARNING)
 
 if(MSVC)
     target_compile_options(classWrapper PRIVATE /Od /Zi)

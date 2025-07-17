@@ -10,7 +10,6 @@
 #include "../Support.h"
 #include "../unittests/ASTMatchers/ASTMatchersTest.h"
 #include "DeclScanner.h"
-#include "ExtendedODRHash.h"
 #include "gtest/gtest.h"
 
 #include <expected>
@@ -20,6 +19,7 @@ using namespace clang::ast_matchers;
 
 namespace clang::class_wrapper {
 
+#if 0
 class DeclScannerTest : public ::testing::Test {
 private:
   std::vector<SymbolRecordEntry> MatchedSymbols;
@@ -138,25 +138,6 @@ protected:
   }
 };
 
-
-StringRef SimpleStructS = R"c(
-struct S {
-  int a;
-  int b;
-};
-)c";
-
-
-StringRef SimpleStructSWithMacro = R"c(
-struct S{
-int a;
-#if MACRO
-char x;
-#endif
-  int b;};
-)c";
-
-
 TEST_F(DeclScannerTest, TestSimpleStructDefine) {
   ScanResults Results =
       scanOnCode(SimpleStructS, "DeclScannerTest/testSimpleStructDefine.c");
@@ -212,12 +193,6 @@ TEST_F(DeclScannerTest, SimpleNotFound){
   ASSERT_EXPECTED_ERROR(EntryOrFail1);
 }
 
-StringRef StructSWithSelfPtr = R"c(
-struct S{
-  int a;
-  struct S * ps;
-};
-)c";
 
 
 TEST_F(DeclScannerTest, TestStructDefineWithSelfPtr) {
@@ -233,4 +208,164 @@ TEST_F(DeclScannerTest, TestStructDefineWithSelfPtr) {
   EXPECT_TRUE(Entry.ImplHash.Valid);
   EXPECT_TRUE(Entry.ImplHash.Completed);
 }
+#endif
+
+class MatcherTest : public ::testing::Test, SourceFileCallbacks {
+  template <std::derived_from<Decl> DeclNode, const char * BindID>
+  class MatcherCallback : public MatchFinder::MatchCallback {
+    MatcherTest &Test;
+  public:
+    MatcherCallback(MatcherTest &Test) : Test(Test) {}
+    void run(const MatchFinder::MatchResult &Result) override {
+      const auto *Node = Result.Nodes.getNodeAs<DeclNode>(BindID);
+      if (!Node) {
+        return;
+      }
+      Test.Result.emplace_back(Result, *Node, *Test.CI);
+    }
+  };
+
+  MatchFinder Finder;
+  std::vector<DeclEntry> Result;
+  std::string ErrorMessage;
+  MatcherCallback<RecordDecl, DeclScanner::RecordDeclID> RecordDeclHandler;
+  const CompilerInstance * CI;
+
+  bool handleBeginSource(CompilerInstance &CI) override {
+    this->CI = &CI;
+    return true;
+  }
+
+protected:
+  MatcherTest() : RecordDeclHandler(*this) {
+  }
+
+  template <typename T>
+  void EnableMatcher();
+
+
+  bool scanOnCode(StringRef Code, StringRef Filename = "input.c",
+                  std::vector<std::string> CompileArgs = {}) {
+
+    std::unique_ptr<FrontendActionFactory> Factory(
+        newFrontendActionFactory(&Finder));
+    if (llvm::find(CompileArgs, "-target") == CompileArgs.end()) {
+      CompileArgs.push_back("-target");
+      CompileArgs.push_back("i386-unknown-unknown");
+    }
+
+    if (!runToolOnCodeWithArgs(Factory->create(),
+                               Code, CompileArgs, Filename)) {
+      ErrorMessage = std::format("Parsing error in \"{}\"", Code);
+      return false;
+    }
+    return true;
+  }
+
+  [[nodiscard]] const std::vector<DeclEntry> &result() const {
+    return Result;
+  }
+
+  [[nodiscard]] const std::string &error_message() const {
+    return ErrorMessage;
+  }
+
+};
+
+
+static testing::AssertionResult
+verifyRangeMatched(StringRef Source, Range CharRange, StringRef Expected) {
+  if (CharRange.getOffset() + CharRange.getLength() > Source.size())
+    return testing::AssertionFailure()
+           << "Invalid range: " << CharRange.getOffset() << " + "
+           << CharRange.getLength() << " > " << Source.size();
+  StringRef MatchedText =
+      Source.substr(CharRange.getOffset(), CharRange.getLength());
+  if (MatchedText != Expected)
+    return testing::AssertionFailure()
+           << "got unexpected matched text \"" << MatchedText << "\"";
+  return testing::AssertionSuccess();
+}
+
+
+static testing::AssertionResult
+verifyRangeMatched(StringRef Source, Range CharRange,
+                   StringRef ExpectedBegin, StringRef ExpectedEnd) {
+  if (CharRange.getOffset() + CharRange.getLength() > Source.size())
+    return testing::AssertionFailure()
+           << "Invalid range: " << CharRange.getOffset() << " + "
+           << CharRange.getLength() << " > " << Source.size();
+  if (CharRange.getLength() < ExpectedBegin.size() ||
+      CharRange.getLength() < ExpectedEnd.size()) {
+    return testing::AssertionFailure() << "Matched text too short";
+      }
+
+  StringRef MatchedText =
+      Source.substr(CharRange.getOffset(), CharRange.getLength());
+
+  if (!MatchedText.starts_with(ExpectedBegin) ||
+      !MatchedText.ends_with(ExpectedEnd)) {
+    return testing::AssertionFailure()
+           << "got unexpected matched text \"" << MatchedText << "\"";
+      }
+  return testing::AssertionSuccess();
+}
+
+template <>
+void MatcherTest::EnableMatcher<RecordDecl>() {
+  Finder.addMatcher(
+      DeclScanner::RecordDeclMatcher, &RecordDeclHandler);
+}
+
+StringRef SimpleStructS = R"c(
+struct S {
+  int a;
+  int b;
+};
+)c";
+
+TEST_F(MatcherTest, SimpleStruct) {
+  EnableMatcher<RecordDecl>();
+
+  ASSERT_TRUE(scanOnCode(SimpleStructS, "a.c"));
+  ASSERT_EQ(result().size(), 1);
+
+  const auto &D = result().front();
+
+  EXPECT_EQ(D.Name, "S");
+  EXPECT_EQ(D.FilePath, "a.c");
+  EXPECT_EQ(D.Kind, Decl::Kind::Record);
+  EXPECT_EQ(D.Storage, StorageClass::SC_None);
+
+  EXPECT_TRUE(D.Expansion.empty());
+
+  EXPECT_TRUE(verifyRangeMatched(SimpleStructS, D.NameRange, "S"));
+  EXPECT_TRUE(verifyRangeMatched(SimpleStructS, D.InfRange, "struct S"));
+  EXPECT_TRUE(verifyRangeMatched(SimpleStructS, D.FullRange,
+                                 SimpleStructS.ltrim()));
+
+  EXPECT_TRUE(D.IsDefinition);
+  EXPECT_FALSE(D.IsInline);
+  EXPECT_FALSE(D.isAnonymous);
+}
+
+
+StringRef SimpleStructSWithMacro = R"c(
+struct S{
+int a;
+#if MACRO
+char x;
+#endif
+  int b;};
+)c";
+
+StringRef StructSWithSelfPtr = R"c(
+struct S{
+  int a;
+  struct S * ps;
+};
+)c";
+
+
+
 } // namespace clang::class_wrapper

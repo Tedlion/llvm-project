@@ -37,7 +37,7 @@ struct RefEntry {
 struct DeclEntry {
   std::string Name;
   std::string FilePath; // source file's path relative to SourceRoot
-  const Decl::Kind Kind;
+  Decl::Kind Kind;
   StorageClass Storage;
 
   std::string Expansion;
@@ -45,39 +45,47 @@ struct DeclEntry {
   // If the Expansion is empty, the following Ranges points to the sources;
   // otherwise, the Ranges points to the Expansion.
   Range NameRange;
-  Range InfRange;
-  Range ImplRange;
+  Range InfRange; // used in function
+  Range FullRange;
 
-  hash_code InfHash;
+  hash_code InfHash;   // for function only
   hash_code ImplHash;
 
-  bool IsDefinition;
-  bool IsInline = false;
+  uint64_t IsDefinition   : 1;
+  uint64_t IsInline       : 1 = false; // for function only
+  uint64_t isAnonymous    : 1 = false; // for record only
+
   SmallVector<RefEntry, 4> InfRefs;  // the symbols used in the declaration
   SmallVector<RefEntry, 4> ImplRefs; // the symbols used in the definition
 
-  DeclEntry(const MatchFinder::MatchResult &Result, const RecordDecl & RD);
-  DeclEntry(const MatchFinder::MatchResult &Result, const EnumDecl & ED);
+  DeclEntry(const MatchFinder::MatchResult &Result, const RecordDecl &RD,
+            const CompilerInstance &CI);
+  DeclEntry(const MatchFinder::MatchResult &Result, const EnumDecl &ED,
+            const CompilerInstance &CI);
+
+  bool operator==(const DeclEntry &) const = default;
 };
 
+
+// extern hash_code getTokenHash
 
 
 class DeclScanner : public SourceFileCallbacks {
 public:
   // make the Matchers public for unit tests
-  static constexpr const char *TypedefDeclID = "typedefDecl";
+  static constexpr char TypedefDeclID[] = "typedefDecl";
   static const Matcher<Decl> TypedefDeclMatcher;
-  static constexpr const char *RecordDeclID = "recordDecl";
+  static constexpr char RecordDeclID[] = "recordDecl";
   static const Matcher<Decl> RecordDeclMatcher;
-  static constexpr const char * EnumDeclID = "enumDecl";
+  static constexpr char EnumDeclID[] = "enumDecl";
   static const Matcher<Decl> EnumDeclMatcher;
-  static constexpr const char * VarDeclID = "varDecl";
+  static constexpr char VarDeclID[] = "varDecl";
   static const Matcher<Decl> VarDeclMatcher;
-  static constexpr const char * FunctionDeclID = "functionDecl";
+  static constexpr char FunctionDeclID[] = "functionDecl";
   static const Matcher<Decl> FunctionDeclMatcher;
-  static constexpr const char * DeclStmtID = "declStmt";
+  static constexpr char DeclStmtID[] = "declStmt";
   static const Matcher<Stmt> DeclStmtMatcher;
-  static constexpr const char * DeclRefExprID = "declRefExpr";
+  static constexpr char DeclRefExprID[] = "declRefExpr";
   static const Matcher<Stmt> DeclRefExprMatcher;
 
   static void run(StringRef Target, ArrayRef<std::string> Filenames,
@@ -88,8 +96,14 @@ public:
   bool handleBeginSource(CompilerInstance &CI) override;
   void handleEndSource() override;
 
-  template <typename NodeType>
-  void HandleNode(const MatchFinder::MatchResult &Result, const NodeType &Node);
+  void PostHandleNode(const MatchFinder::MatchResult &Result,
+                      const RecordDecl &RD, DeclEntry &Entry);
+
+  template <std::derived_from<Decl> NodeType>
+  void HandleNode(const MatchFinder::MatchResult &Result, const NodeType &Node) {
+    DeclEntries.emplace_back(Result, Node, *CompilerInstancePtr);
+    PostHandleNode(Result, Node, DeclEntries.back());
+  }
 
   template <typename NodeType, const char * BindID>
   class MatchHandler : public MatchFinder::MatchCallback {
@@ -116,7 +130,6 @@ public:
     }
   };
 
-
 private:
   const ClassWrapperContext &Context;
   std::string Target;
@@ -127,21 +140,14 @@ private:
   std::string RelativeCurrentFilePath; // relative to SourceRoot
   std::vector<DeclEntry> DeclEntries;
 
+  const CompilerInstance * CompilerInstancePtr = nullptr;
+
   DeclScanner(StringRef Target, ArrayRef<std::string> Filename,
                     const ClassWrapperContext &Context);
 
   MatchHandler<RecordDecl, RecordDeclID> RecordDeclHandler;
 
 };
-
-
-
-// using NeedToWrapFunc = std::function<bool(const StringRef &)>;
-// using RecordSymbolFunc = std::function<void(const SymbolRecordEntry&)>;
-//
-// extern std::unique_ptr<MatchFinder> newDeclScannerMatchFinderFactory(
-//     const NeedToWrapFunc &NeedToWrap, const RecordSymbolFunc &RecordSymbol,
-//     const std::shared_ptr<ExtendedODRHash::ODRHashCache> &TypeHashCache);
 
 } // namespace clang::class_wrapper
 
