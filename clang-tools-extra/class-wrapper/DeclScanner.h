@@ -44,12 +44,12 @@ struct DeclEntry {
 
   // If the Expansion is empty, the following Ranges points to the sources;
   // otherwise, the Ranges points to the Expansion.
-  Range NameRange;
-  Range InfRange; // used in function
-  Range FullRange;
+  Range NameRange{0, 0};
+  Range InfRange{0, 0}; // used in function
+  Range FullRange{0, 0};
 
-  hash_code InfHash;   // for function only
-  hash_code ImplHash;
+  hash_code InfHash{0};   // for function only
+  hash_code ImplHash{0};
 
   uint64_t IsDefinition   : 1;
   uint64_t IsInline       : 1 = false; // for function only

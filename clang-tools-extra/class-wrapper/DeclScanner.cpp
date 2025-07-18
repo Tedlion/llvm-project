@@ -32,7 +32,6 @@ const Matcher<Stmt> DeclScanner::DeclRefExprMatcher =
     traverse(TK_IgnoreUnlessSpelledInSource, declRefExpr().bind(DeclRefExprID));
 
 
-
 template <typename NodeType>
 concept PrettyDumpNode =
     requires(const NodeType &Node, const ASTContext &Context)
@@ -49,12 +48,12 @@ static Range getRangeFromChar(const CharSourceRange &CSR,
 }
 
 
+// Ignoring spaces, newlines, comments, and tabs when getting the Hash
 static hash_code getTokenHash(CharSourceRange SCR, const SourceManager &SM,
                               const CompilerInstance &CI) {
   hash_code Hash(0);
 
   Token Tok;
-  std::string TokensStr;
   bool ReachedEnd = false;
   Preprocessor &PP = CI.getPreprocessor();
   SourceLocation Begin = SCR.getBegin();
@@ -68,12 +67,11 @@ static hash_code getTokenHash(CharSourceRange SCR, const SourceManager &SM,
       break;
     if (Tok.getLocation() == End)
       ReachedEnd = true;
-    TokensStr += PP.getSpelling(Tok);
-    TokensStr += " ";
+    std::string TokSpelling = PP.getSpelling(Tok);
+    Hash = hash_combine(Hash, TokSpelling);
   }
 
-  llvm::errs() << "Tokens: " << TokensStr << "\n";
-
+  llvm::errs() <<"Hash:" << hash_value(Hash) << "\n";
   return Hash;
 }
 
@@ -89,25 +87,23 @@ DeclEntry::DeclEntry(const MatchFinder::MatchResult &Result,
 
   RD.dump();
   RD.getSourceRange().print(llvm::errs(), SM);
-  // TODO
-  llvm::errs() << "0\n";
+  llvm::errs() << "\n";
 
   if (const auto *Id = RD.getIdentifier()) {
     SourceLocation NameLoc = RD.getLocation();
-    llvm::errs() << "1\n";
     unsigned NameBegin = SM.getFileOffset(NameLoc);
-    llvm::errs() << "2\n";
     NameRange = Range(NameBegin, Id->getLength());
   } else {
     isAnonymous = true;
   }
 
-  llvm::errs() << "3\n";
-
   CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
   FullRange = getRangeFromChar(AssociatedRange, SM);
 
-  //getTokenHash(AssociatedRange, SM, CI);
+  IsDefinition = RD.isCompleteDefinition();
+  if (IsDefinition) {
+    ImplHash = getTokenHash(AssociatedRange, SM, CI);
+  }
 }
 
 
