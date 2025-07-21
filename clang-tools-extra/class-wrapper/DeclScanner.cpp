@@ -76,34 +76,79 @@ static hash_code getTokenHash(CharSourceRange SCR, const SourceManager &SM,
 }
 
 
-DeclEntry::DeclEntry(const MatchFinder::MatchResult &Result,
-                     const RecordDecl &RD, const CompilerInstance &CI) {
-  const SourceManager& SM = *Result.SourceManager;
+static bool checkExpansion(SourceRange AssociatedRange,
+                           SourceLocation NameLoc, const SourceManager &SM,
+                           const CompilerInstance &CI,
+                           std::string &Expansion, Range Replaced) {
+  SourceLocation AssociatedBegin = AssociatedRange.getBegin();
+  SourceLocation AssociatedEnd = AssociatedRange.getEnd();
 
-  Name = RD.getName().str();
-  FilePath = SM.getFilename(RD.getBeginLoc()).str();
-  Kind = RD.getKind();
-  Storage = SC_None;
+  llvm::errs() << std::format("AssociatedBegin: {} {}\n"
+                            "AssociatedEnd: {} {}\n"
+                            "NameBegin: {} {}\n",
+                            AssociatedBegin.printToString(SM), AssociatedBegin.isMacroID(),
+                            AssociatedEnd.printToString(SM), AssociatedEnd.isMacroID(),
+                            NameLoc.printToString(SM), NameLoc.isMacroID());
+  if (AssociatedBegin.isMacroID() || AssociatedEnd.isMacroID() || NameLoc.
+      isMacroID()) {
+    CharSourceRange ExpansionRange = SM.getExpansionRange(AssociatedRange);
+    llvm::errs() << "ExpansionRange: " << ExpansionRange.getAsRange().printToString(SM) << "\n";
+    StringRef ExpansionText = Lexer::getSourceText(ExpansionRange, SM, CI.getLangOpts());
+    llvm::errs() << "ExpansionText: " << ExpansionText << "\n";
+    return true;
+  }
+
+
+  return false;
+}
+
+
+
+std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
+                                      const RecordDecl &RD,
+                                      const CompilerInstance &CI) {
+  // Ignore RecordDecl in local scope
+  if (RD.getDeclContext()->isFunctionOrMethod()) {
+    return std::nullopt;
+  }
+
+  // TODO: nested case
+
+  const SourceManager& SM = *Result.SourceManager;
+  DeclEntry D;
+
+  D.Name = RD.getName().str();
+  D.FilePath = SM.getFilename(RD.getBeginLoc()).str();
+  D.Kind = RD.getKind();
+  D.Storage = SC_None;
+  D.isUnion = RD.isUnion();
 
   RD.dump();
   RD.getSourceRange().print(llvm::errs(), SM);
   llvm::errs() << "\n";
 
+  SourceLocation NameLoc;
   if (const auto *Id = RD.getIdentifier()) {
-    SourceLocation NameLoc = RD.getLocation();
+    NameLoc = RD.getLocation();
     unsigned NameBegin = SM.getFileOffset(NameLoc);
-    NameRange = Range(NameBegin, Id->getLength());
+    D.NameRange = Range(NameBegin, Id->getLength());
   } else {
-    isAnonymous = true;
+    D.isAnonymous = true;
   }
 
   CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
-  FullRange = getRangeFromChar(AssociatedRange, SM);
-
-  IsDefinition = RD.isCompleteDefinition();
-  if (IsDefinition) {
-    ImplHash = getTokenHash(AssociatedRange, SM, CI);
+  if (AssociatedRange.isInvalid()) {
+    AssociatedRange = CharSourceRange::getTokenRange(RD.getSourceRange());
   }
+  D.FullRange = getRangeFromChar(AssociatedRange, SM);
+
+  checkExpansion(RD.getSourceRange(), NameLoc, SM, CI, D.Expansion, D.ExpansionReplaced);
+
+  // D.IsDefinition = RD.isCompleteDefinition();
+  // if (D.IsDefinition) {
+  //   D.ImplHash = getTokenHash(AssociatedRange, SM, CI);
+  // }
+  return D;
 }
 
 

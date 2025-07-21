@@ -40,7 +40,12 @@ struct DeclEntry {
   Decl::Kind Kind;
   StorageClass Storage;
 
+  // The Expansion is only necessary when:
+  // 1. Larger than the Decl, or
+  // 2. Contains the Decl Name
+  // Then the expansion will be the string within AssociatedRange of the Decl
   std::string Expansion;
+  Range ExpansionReplaced{0, 0};
 
   // If the Expansion is empty, the following Ranges points to the sources;
   // otherwise, the Ranges points to the Expansion.
@@ -54,17 +59,22 @@ struct DeclEntry {
   uint64_t IsDefinition   : 1;
   uint64_t IsInline       : 1 = false; // for function only
   uint64_t isAnonymous    : 1 = false; // for record only
+  uint64_t isUnion        : 1 = false;
 
   SmallVector<RefEntry, 4> InfRefs;  // the symbols used in the declaration
   SmallVector<RefEntry, 4> ImplRefs; // the symbols used in the definition
 
-  DeclEntry(const MatchFinder::MatchResult &Result, const RecordDecl &RD,
-            const CompilerInstance &CI);
-  DeclEntry(const MatchFinder::MatchResult &Result, const EnumDecl &ED,
-            const CompilerInstance &CI);
-
   bool operator==(const DeclEntry &) const = default;
 };
+
+
+std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
+                                      const RecordDecl &RD,
+                                      const CompilerInstance &CI);
+
+std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
+                                      const EnumDecl &ED,
+                                      const CompilerInstance &CI);
 
 
 // extern hash_code getTokenHash
@@ -101,8 +111,10 @@ public:
 
   template <std::derived_from<Decl> NodeType>
   void HandleNode(const MatchFinder::MatchResult &Result, const NodeType &Node) {
-    DeclEntries.emplace_back(Result, Node, *CompilerInstancePtr);
-    PostHandleNode(Result, Node, DeclEntries.back());
+    if (auto Entry = getDeclEntry(Result, Node, *CompilerInstancePtr)) {
+      DeclEntries.push_back(std::move(*Entry));
+      PostHandleNode(Result, Node, DeclEntries.back());
+    }
   }
 
   template <typename NodeType, const char * BindID>
