@@ -12,6 +12,7 @@
 #include <optional>
 
 #define DEBUG_TYPE "macro-expansion-context"
+#define LLVM_DEBUG(x) x
 
 static void dumpTokenInto(const clang::Preprocessor &PP, llvm::raw_ostream &OS,
                           clang::Token Tok);
@@ -21,13 +22,15 @@ namespace detail {
 class MacroExpansionRangeRecorder : public PPCallbacks {
   const Preprocessor &PP;
   SourceManager &SM;
+  const LangOptions &LangOpts;
   MacroExpansionContext::ExpansionRangeMap &ExpansionRanges;
 
 public:
   explicit MacroExpansionRangeRecorder(
-      const Preprocessor &PP, SourceManager &SM,
+      const Preprocessor &PP, SourceManager &SM, const LangOptions &LangOpts,
       MacroExpansionContext::ExpansionRangeMap &ExpansionRanges)
-      : PP(PP), SM(SM), ExpansionRanges(ExpansionRanges) {}
+    : PP(PP), SM(SM), LangOpts(LangOpts),
+      ExpansionRanges(ExpansionRanges) {}
 
   void MacroExpands(const Token &MacroName, const MacroDefinition &MD,
                     SourceRange Range, const MacroArgs *Args) override {
@@ -38,6 +41,9 @@ public:
     SourceLocation MacroNameBegin = SM.getExpansionLoc(MacroName.getLocation());
     assert(MacroNameBegin == SM.getExpansionLoc(Range.getBegin()));
 
+    llvm::dbgs() << "RangeBeforeExpand" << Range.getBegin().printToString(SM)
+                 << " to " << Range.getEnd().printToString(SM) << '\n';
+
     const SourceLocation ExpansionEnd = [Range, &SM = SM, &MacroName] {
       // If the range is empty, use the length of the macro.
       if (Range.getBegin() == Range.getEnd())
@@ -47,7 +53,6 @@ public:
       // Include the last character.
       return SM.getExpansionLoc(Range.getEnd()).getLocWithOffset(1);
     }();
-
     (void)PP;
     LLVM_DEBUG(llvm::dbgs() << "MacroExpands event: '";
                dumpTokenInto(PP, llvm::dbgs(), MacroName);
@@ -56,6 +61,25 @@ public:
                MacroNameBegin.print(llvm::dbgs(), SM);
                llvm::dbgs() << ", expansion end at ";
                ExpansionEnd.print(llvm::dbgs(), SM); llvm::dbgs() << '\n';);
+    SourceLocation SpellingLoc = SM.getSpellingLoc(MacroName.getLocation());
+    llvm::dbgs() << "Spelling at "; SpellingLoc.print(llvm::dbgs(), SM);
+    llvm::dbgs() << '\n';
+
+    MacroInfo *MI = MD.getMacroInfo();
+    if (MI) {
+      SourceLocation DefinitionBegin = MI->getDefinitionLoc();
+      SourceLocation DefinitionEnd = MI->getDefinitionEndLoc();
+      StringRef DefinitionText = Lexer::getSourceText(
+          CharSourceRange::getTokenRange(DefinitionBegin, DefinitionEnd), SM,
+          LangOpts);
+      llvm::dbgs() << "MacroDefinition: '" << DefinitionText << "' in ";
+      DefinitionBegin.print(llvm::dbgs(), SM);
+      llvm::dbgs()<< " ";
+      DefinitionEnd.print(llvm::dbgs(), SM);
+      llvm::dbgs() << '\n';
+    } else {
+      llvm::dbgs() << "MacroInfo not found\n";
+    }
 
     // If the expansion range is empty, use the identifier of the macro as a
     // range.
@@ -93,7 +117,7 @@ void MacroExpansionContext::registerForPreprocessor(Preprocessor &NewPP) {
 
   // Make sure that the Preprocessor does not outlive the MacroExpansionContext.
   PP->addPPCallbacks(std::make_unique<detail::MacroExpansionRangeRecorder>(
-      *PP, *SM, ExpansionRanges));
+      *PP, *SM, LangOpts, ExpansionRanges));
   // Same applies here.
   PP->setTokenWatcher([this](const Token &Tok) { onTokenLexed(Tok); });
 }
@@ -237,13 +261,17 @@ void MacroExpansionContext::onTokenLexed(const Token &Tok) {
   if (SLoc.isFileID())
     return;
 
+  // SourceLocation SpellingLoc = SM->getSpellingLoc(SLoc);
+
   LLVM_DEBUG(llvm::dbgs() << "lexed macro expansion token '";
              dumpTokenInto(*PP, llvm::dbgs(), Tok); llvm::dbgs() << "' at ";
-             SLoc.print(llvm::dbgs(), *SM); llvm::dbgs() << '\n';);
+             SLoc.print(llvm::dbgs(), *SM);
+             llvm::dbgs() << " " << SLoc.getRawEncoding() << '\n';);
 
   // Remove spelling location.
   SourceLocation CurrExpansionLoc = SM->getExpansionLoc(SLoc);
-
+  llvm::dbgs() << "CurrExpansionLoc: " << CurrExpansionLoc.printToString(*SM)
+               << " " << CurrExpansionLoc.getRawEncoding() << '\n';
   MacroExpansionText TokenAsString;
   llvm::raw_svector_ostream OS(TokenAsString);
 

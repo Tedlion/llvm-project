@@ -49,21 +49,23 @@ static Range getRangeFromChar(const CharSourceRange &CSR,
 
 
 // Ignoring spaces, newlines, comments, and tabs when getting the Hash
-static hash_code getTokenHash(CharSourceRange SCR, const SourceManager &SM,
+static hash_code getTokenHash(SourceRange SR, const SourceManager &SM,
                               const CompilerInstance &CI) {
   hash_code Hash(0);
 
   Token Tok;
   bool ReachedEnd = false;
   Preprocessor &PP = CI.getPreprocessor();
-  SourceLocation Begin = SCR.getBegin();
-  SourceLocation End = SCR.getEnd();
+  SourceLocation Begin = SR.getBegin();
+  SourceLocation End = SR.getEnd();
 
+  // FIXME : fatal error: error opening file '<invalid loc>' with macros
   PP.EnterSourceFile(SM.getFileID(Begin), nullptr, Begin);
 
   while (!ReachedEnd) {
     PP.Lex(Tok);
-    if (Tok.is(tok::eof) || SM.isBeforeInTranslationUnit(End, Tok.getLocation()))
+    if (Tok.is(tok::eof) || SM.
+        isBeforeInTranslationUnit(End, Tok.getLocation()))
       break;
     if (Tok.getLocation() == End)
       ReachedEnd = true;
@@ -71,7 +73,7 @@ static hash_code getTokenHash(CharSourceRange SCR, const SourceManager &SM,
     Hash = hash_combine(Hash, TokSpelling);
   }
 
-  llvm::errs() <<"Hash:" << hash_value(Hash) << "\n";
+  llvm::errs() << "Hash:" << hash_value(Hash) << "\n";
   return Hash;
 }
 
@@ -79,34 +81,55 @@ static hash_code getTokenHash(CharSourceRange SCR, const SourceManager &SM,
 static bool checkExpansion(SourceRange AssociatedRange,
                            SourceLocation NameLoc, const SourceManager &SM,
                            const CompilerInstance &CI,
+                           const MacroExpansionContext &MacroContext,
                            std::string &Expansion, Range Replaced) {
   SourceLocation AssociatedBegin = AssociatedRange.getBegin();
   SourceLocation AssociatedEnd = AssociatedRange.getEnd();
 
   llvm::errs() << std::format("AssociatedBegin: {} {}\n"
-                            "AssociatedEnd: {} {}\n"
-                            "NameBegin: {} {}\n",
-                            AssociatedBegin.printToString(SM), AssociatedBegin.isMacroID(),
-                            AssociatedEnd.printToString(SM), AssociatedEnd.isMacroID(),
-                            NameLoc.printToString(SM), NameLoc.isMacroID());
-  if (AssociatedBegin.isMacroID() || AssociatedEnd.isMacroID() || NameLoc.
-      isMacroID()) {
-    CharSourceRange ExpansionRange = SM.getExpansionRange(AssociatedRange);
-    llvm::errs() << "ExpansionRange: " << ExpansionRange.getAsRange().printToString(SM) << "\n";
-    StringRef ExpansionText = Lexer::getSourceText(ExpansionRange, SM, CI.getLangOpts());
-    llvm::errs() << "ExpansionText: " << ExpansionText << "\n";
-    return true;
+                              "AssociatedEnd: {} {}\n"
+                              "NameBegin: {} {}\n",
+                              AssociatedBegin.printToString(SM),
+                              AssociatedBegin.isMacroID(),
+                              AssociatedEnd.printToString(SM),
+                              AssociatedEnd.isMacroID(),
+                              NameLoc.printToString(SM), NameLoc.isMacroID());
+  PresumedLoc PresumedBegin = SM.getPresumedLoc(AssociatedBegin);
+  llvm::errs() << "PresumedBegin: " << PresumedBegin.getFilename()
+               << ":" << PresumedBegin.getLine() << ":"
+               << PresumedBegin.getColumn() << "\n";
+
+  if (AssociatedBegin.isMacroID()) {
+    SourceLocation ExpansionLoc = SM.getExpansionLoc(AssociatedBegin);
+    llvm::errs() << "AssociatedBegin ExpansionLoc: "
+        << ExpansionLoc.printToString(SM) << "\n";
+    std::optional<StringRef> ExpansionText = MacroContext.getExpandedText(
+        ExpansionLoc);
+    if (ExpansionText) {
+      llvm::errs() << "AssociatedBegin Expansion: " << *ExpansionText << "\n";
+      return true;
+    } else {
+      llvm::errs() << "AssociatedBegin Expansion not found\n";
+    }
   }
 
+  // if (AssociatedBegin.isMacroID() || AssociatedEnd.isMacroID() || NameLoc.
+  //     isMacroID()) {
+  //   CharSourceRange ExpansionRange = SM.getExpansionRange(AssociatedRange);
+  //   llvm::errs() << "ExpansionRange: " << ExpansionRange.getAsRange().printToString(SM) << "\n";
+  //   StringRef ExpansionText = Lexer::getSourceText(ExpansionRange, SM, CI.getLangOpts());
+  //   llvm::errs() << "ExpansionText: " << ExpansionText << "\n";
+  //   return true;
+  // }
 
   return false;
 }
 
 
-
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const RecordDecl &RD,
-                                      const CompilerInstance &CI) {
+                                      const CompilerInstance &CI,
+                                      const MacroExpansionContext &MacroContext) {
   // Ignore RecordDecl in local scope
   if (RD.getDeclContext()->isFunctionOrMethod()) {
     return std::nullopt;
@@ -114,7 +137,7 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
 
   // TODO: nested case
 
-  const SourceManager& SM = *Result.SourceManager;
+  const SourceManager &SM = *Result.SourceManager;
   DeclEntry D;
 
   D.Name = RD.getName().str();
@@ -124,7 +147,8 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
   D.isUnion = RD.isUnion();
 
   RD.dump();
-  RD.getSourceRange().print(llvm::errs(), SM);
+  SourceRange SR = RD.getSourceRange();
+  SR.print(llvm::errs(), SM);
   llvm::errs() << "\n";
 
   SourceLocation NameLoc;
@@ -138,16 +162,16 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
 
   CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
   if (AssociatedRange.isInvalid()) {
-    AssociatedRange = CharSourceRange::getTokenRange(RD.getSourceRange());
+    AssociatedRange = CharSourceRange::getTokenRange(SR);
   }
   D.FullRange = getRangeFromChar(AssociatedRange, SM);
 
-  checkExpansion(RD.getSourceRange(), NameLoc, SM, CI, D.Expansion, D.ExpansionReplaced);
+  checkExpansion(SR, NameLoc, SM, CI, MacroContext, D.Expansion, D.ExpansionReplaced);
 
-  // D.IsDefinition = RD.isCompleteDefinition();
-  // if (D.IsDefinition) {
-  //   D.ImplHash = getTokenHash(AssociatedRange, SM, CI);
-  // }
+  D.IsDefinition = RD.isCompleteDefinition();
+  if (D.IsDefinition) {
+    // D.ImplHash = getTokenHash(SR, SM, CI);
+  }
   return D;
 }
 
@@ -279,7 +303,8 @@ bool DeclScanner::handleBeginSource(CompilerInstance &CI) {
   using namespace std::filesystem;
   RelativeCurrentFilePath = relative(path(CurrentFilePath),
                                      path(Context.SourceRoot)).generic_string();
-
+  MacroContext = std::make_unique<MacroExpansionContext>(CI.getLangOpts());
+  MacroContext->registerForPreprocessor(CI.getPreprocessor());
   return true;
 }
 
@@ -290,8 +315,8 @@ void DeclScanner::handleEndSource() {
 
 
 void DeclScanner::run(StringRef Target, ArrayRef<std::string> Filenames,
-                    const CompilationDatabase &Compilations,
-                    const ClassWrapperContext &Context) {
+                      const CompilationDatabase &Compilations,
+                      const ClassWrapperContext &Context) {
   ClangTool Tool(Compilations, Filenames,
                  std::make_shared<PCHContainerOperations>(),
                  Context.getBaseFS(), Context.getFiles());

@@ -13,9 +13,9 @@
 
 #include "../Support.h"
 #include "../unittests/ASTMatchers/ASTMatchersTest.h"
+
 #include "DeclScanner.h"
 #include "gtest/gtest.h"
-
 #include <expected>
 
 using namespace clang;
@@ -34,7 +34,7 @@ class MatcherTest : public ::testing::Test, SourceFileCallbacks {
         return;
       }
 
-      if (auto Entry = getDeclEntry(Result, *Node, *Test.CI)) {
+      if (auto Entry = getDeclEntry(Result, *Node, *Test.CI, *Test.MacroContext.get())) {
         Test.DeclEntries.push_back(*Entry);
       }
     }
@@ -45,9 +45,12 @@ class MatcherTest : public ::testing::Test, SourceFileCallbacks {
   std::string ErrorMessage;
   MatcherCallback<RecordDecl, DeclScanner::RecordDeclID> RecordDeclHandler;
   const CompilerInstance * CI = nullptr;
+  std::unique_ptr<MacroExpansionContext> MacroContext;
 
   bool handleBeginSource(CompilerInstance &CI) override {
     this->CI = &CI;
+    MacroContext = std::make_unique<MacroExpansionContext>(CI.getLangOpts());
+    MacroContext->registerForPreprocessor(CI.getPreprocessor());
     return true;
   }
 
@@ -365,8 +368,10 @@ TEST_F(MatcherTest, StructInFunction) {
 
 
 StringRef StructExpandFromMacro = R"c(
-#define MACRO1 int x; struct S { int a; int b; }
-MACRO1;
+#define MACRO1 int x;
+#define MACRO2(a, b) struct S { int a; int b; };
+#define MACRO3(a) MACRO1 MACRO2(a, bb)
+MACRO3(aaa);
 )c";
 
 
