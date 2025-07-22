@@ -52,7 +52,7 @@ class MacroArgs final
   /// Preprocessor owns which we use to avoid thrashing malloc/free.
   MacroArgs *ArgCache;
 
-  /// MacroArgs - The number of arguments the invoked macro expects.
+  /// MacroArgs - The numberz of arguments the invoked macro expects.
   unsigned NumMacroArgs;
 
   MacroArgs(unsigned NumToks, bool varargsElided, unsigned MacroArgs)

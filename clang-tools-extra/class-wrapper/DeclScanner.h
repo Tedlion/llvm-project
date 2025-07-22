@@ -9,6 +9,7 @@
 
 #include "ClassWrapperContext.h"
 
+#include "clang/Analysis//MacroExpansionContext.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Tooling/CompilationDatabase.h"
@@ -70,11 +71,13 @@ struct DeclEntry {
 
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const RecordDecl &RD,
-                                      const CompilerInstance &CI);
+                                      const CompilerInstance &CI,
+                                      const MacroExpansionContext &MacroContext);
 
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const EnumDecl &ED,
-                                      const CompilerInstance &CI);
+                                      const CompilerInstance &CI,
+                                      const MacroExpansionContext &MacroContext);
 
 
 // extern hash_code getTokenHash
@@ -111,7 +114,7 @@ public:
 
   template <std::derived_from<Decl> NodeType>
   void HandleNode(const MatchFinder::MatchResult &Result, const NodeType &Node) {
-    if (auto Entry = getDeclEntry(Result, Node, *CompilerInstancePtr)) {
+    if (auto Entry = getDeclEntry(Result, Node, *CompilerInstancePtr, *MacroContext)) {
       DeclEntries.push_back(std::move(*Entry));
       PostHandleNode(Result, Node, DeclEntries.back());
     }
@@ -153,6 +156,7 @@ private:
   std::vector<DeclEntry> DeclEntries;
 
   const CompilerInstance * CompilerInstancePtr = nullptr;
+  std::unique_ptr<MacroExpansionContext> MacroContext;
 
   DeclScanner(StringRef Target, ArrayRef<std::string> Filename,
                     const ClassWrapperContext &Context);
