@@ -34,7 +34,7 @@ class MatcherTest : public ::testing::Test, SourceFileCallbacks {
         return;
       }
 
-      if (auto Entry = getDeclEntry(Result, *Node, *Test.CI, *Test.MacroContext.get())) {
+      if (auto Entry = getDeclEntry(Result, *Node, *Test.CI, *Test.MacroRecorder.get())) {
         Test.DeclEntries.push_back(*Entry);
       }
     }
@@ -45,12 +45,12 @@ class MatcherTest : public ::testing::Test, SourceFileCallbacks {
   std::string ErrorMessage;
   MatcherCallback<RecordDecl, DeclScanner::RecordDeclID> RecordDeclHandler;
   const CompilerInstance * CI = nullptr;
-  std::unique_ptr<MacroExpansionContext> MacroContext;
+  std::unique_ptr<MacroExpansionRecorder> MacroRecorder;
 
   bool handleBeginSource(CompilerInstance &CI) override {
     this->CI = &CI;
-    MacroContext = std::make_unique<MacroExpansionContext>(CI.getLangOpts());
-    MacroContext->registerForPreprocessor(CI.getPreprocessor());
+    MacroRecorder = std::make_unique<MacroExpansionRecorder>(CI.getLangOpts());
+    MacroRecorder->registerForPreprocessor(CI.getPreprocessor());
     return true;
   }
 

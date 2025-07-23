@@ -54,23 +54,44 @@ static hash_code getTokenHash(SourceRange SR, const SourceManager &SM,
   hash_code Hash(0);
 
   Token Tok;
+  bool ReachBegin = false;
   bool ReachedEnd = false;
+
   Preprocessor &PP = CI.getPreprocessor();
   SourceLocation Begin = SR.getBegin();
   SourceLocation End = SR.getEnd();
 
-  // FIXME : fatal error: error opening file '<invalid loc>' with macros
-  PP.EnterSourceFile(SM.getFileID(Begin), nullptr, Begin);
+  llvm::errs() << "RawSrcRange: " << Begin.getRawEncoding() << " " << End.
+      getRawEncoding() << "\n";
+
+  SourceLocation Entrance;
+  if (Begin.isMacroID()) {
+    Entrance = SM.getExpansionLoc(Begin);
+  } else {
+    Entrance = SM.getSpellingLoc(Begin);
+  }
+
+  PP.EnterSourceFile(SM.getFileID(Entrance), nullptr, Begin);
 
   while (!ReachedEnd) {
     PP.Lex(Tok);
-    if (Tok.is(tok::eof) || SM.
-        isBeforeInTranslationUnit(End, Tok.getLocation()))
+    std::string TokSpelling = PP.getSpelling(Tok);
+    SourceLocation TokLoc = Tok.getLocation();
+    if (Tok.is(tok::eof))
       break;
+    if (TokLoc== Begin)
+      ReachBegin = true;
+    if (!ReachBegin) {
+      llvm::errs() << "Skipping token '"
+          << TokSpelling << "' at " << TokLoc.printToString(SM)
+          <<" " << TokLoc.getRawEncoding() << "\n";
+      continue;;
+    }
+    llvm::errs() << "Hash token: '" << TokSpelling << "' at "
+        << TokLoc.printToString(SM) << " " << TokLoc.getRawEncoding() << "\n";
+    Hash = hash_combine(Hash, TokSpelling);
     if (Tok.getLocation() == End)
       ReachedEnd = true;
-    std::string TokSpelling = PP.getSpelling(Tok);
-    Hash = hash_combine(Hash, TokSpelling);
   }
 
   llvm::errs() << "Hash:" << hash_value(Hash) << "\n";
@@ -81,7 +102,7 @@ static hash_code getTokenHash(SourceRange SR, const SourceManager &SM,
 static bool checkExpansion(SourceRange AssociatedRange,
                            SourceLocation NameLoc, const SourceManager &SM,
                            const CompilerInstance &CI,
-                           const MacroExpansionContext &MacroContext,
+                           const MacroExpansionRecorder &MacroRecorder,
                            std::string &Expansion, Range Replaced) {
   SourceLocation AssociatedBegin = AssociatedRange.getBegin();
   SourceLocation AssociatedEnd = AssociatedRange.getEnd();
@@ -103,7 +124,7 @@ static bool checkExpansion(SourceRange AssociatedRange,
     SourceLocation ExpansionLoc = SM.getExpansionLoc(AssociatedBegin);
     llvm::errs() << "AssociatedBegin ExpansionLoc: "
         << ExpansionLoc.printToString(SM) << "\n";
-    std::optional<StringRef> ExpansionText = MacroContext.getExpandedText(
+    std::optional<StringRef> ExpansionText = MacroRecorder.getExpandedText(
         ExpansionLoc);
     if (ExpansionText) {
       llvm::errs() << "AssociatedBegin Expansion: " << *ExpansionText << "\n";
@@ -129,7 +150,7 @@ static bool checkExpansion(SourceRange AssociatedRange,
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const RecordDecl &RD,
                                       const CompilerInstance &CI,
-                                      const MacroExpansionContext &MacroContext) {
+                                      const MacroExpansionRecorder &MacroRecorder) {
   // Ignore RecordDecl in local scope
   if (RD.getDeclContext()->isFunctionOrMethod()) {
     return std::nullopt;
@@ -151,6 +172,11 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
   SR.print(llvm::errs(), SM);
   llvm::errs() << "\n";
 
+  D.IsDefinition = RD.isCompleteDefinition();
+  if (D.IsDefinition) {
+    D.ImplHash = getTokenHash(SR, SM, CI);
+  }
+
   SourceLocation NameLoc;
   if (const auto *Id = RD.getIdentifier()) {
     NameLoc = RD.getLocation();
@@ -166,12 +192,9 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
   }
   D.FullRange = getRangeFromChar(AssociatedRange, SM);
 
-  checkExpansion(SR, NameLoc, SM, CI, MacroContext, D.Expansion, D.ExpansionReplaced);
+  checkExpansion(SR, NameLoc, SM, CI, MacroRecorder, D.Expansion, D.ExpansionReplaced);
 
-  D.IsDefinition = RD.isCompleteDefinition();
-  if (D.IsDefinition) {
-    // D.ImplHash = getTokenHash(SR, SM, CI);
-  }
+
   return D;
 }
 
@@ -303,7 +326,7 @@ bool DeclScanner::handleBeginSource(CompilerInstance &CI) {
   using namespace std::filesystem;
   RelativeCurrentFilePath = relative(path(CurrentFilePath),
                                      path(Context.SourceRoot)).generic_string();
-  MacroContext = std::make_unique<MacroExpansionContext>(CI.getLangOpts());
+  MacroContext = std::make_unique<MacroExpansionRecorder>(CI.getLangOpts());
   MacroContext->registerForPreprocessor(CI.getPreprocessor());
   return true;
 }
