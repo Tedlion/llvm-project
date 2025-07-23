@@ -1,32 +1,35 @@
-//===- MacroExpansionContext.cpp - Macro expansion information --*- C++ -*-===//
+//===- MacroExpansionRecorder.cpp - Macro expansion information -*- C++ -*-===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//  Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+//  See https://llvm.org/LICENSE.txt for license information.
+//  SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-//===----------------------------------------------------------------------===//
+// ===----------------------------------------------------------------------===/
 
-#include "clang/Analysis/MacroExpansionContext.h"
-#include "clang/Format/Format.h"
+
+#include "MacroExpansionRecorder.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
 
-#define DEBUG_TYPE "macro-expansion-context"
+#define DEBUG_TYPE "macro-expansion-recorder"
+#define LLVM_DEBUG(x) x
+
 
 static void dumpTokenInto(const clang::Preprocessor &PP, llvm::raw_ostream &OS,
                           clang::Token Tok);
 
 namespace clang {
+namespace class_wrapper {
 namespace detail {
-class MacroExpansionRangeRecorder : public PPCallbacks {
+class MacroExpansionRecorderCallback : public PPCallbacks {
   const Preprocessor &PP;
   SourceManager &SM;
-  MacroExpansionContext::ExpansionRangeMap &ExpansionRanges;
+  MacroExpansionRecorder::ExpansionRangeMap &ExpansionRanges;
 
 public:
-  explicit MacroExpansionRangeRecorder(
+  explicit MacroExpansionRecorderCallback(
       const Preprocessor &PP, SourceManager &SM,
-      MacroExpansionContext::ExpansionRangeMap &ExpansionRanges)
+      MacroExpansionRecorder::ExpansionRangeMap &ExpansionRanges)
       : PP(PP), SM(SM), ExpansionRanges(ExpansionRanges) {}
 
   void MacroExpands(const Token &MacroName, const MacroDefinition &MD,
@@ -59,7 +62,7 @@ public:
 
     // If the expansion range is empty, use the identifier of the macro as a
     // range.
-    MacroExpansionContext::ExpansionRangeMap::iterator It;
+    MacroExpansionRecorder::ExpansionRangeMap::iterator It;
     bool Inserted;
     std::tie(It, Inserted) =
         ExpansionRanges.try_emplace(MacroNameBegin, ExpansionEnd);
@@ -79,27 +82,30 @@ public:
     }
   }
 };
-} // namespace detail
-} // namespace clang
+
+}
+}
+}
 
 using namespace clang;
+using namespace clang::class_wrapper;
 
-MacroExpansionContext::MacroExpansionContext(const LangOptions &LangOpts)
+MacroExpansionRecorder::MacroExpansionRecorder(const LangOptions &LangOpts)
     : LangOpts(LangOpts) {}
 
-void MacroExpansionContext::registerForPreprocessor(Preprocessor &NewPP) {
+void MacroExpansionRecorder::registerForPreprocessor(Preprocessor &NewPP) {
   PP = &NewPP;
   SM = &NewPP.getSourceManager();
 
-  // Make sure that the Preprocessor does not outlive the MacroExpansionContext.
-  PP->addPPCallbacks(std::make_unique<detail::MacroExpansionRangeRecorder>(
+  // Make sure that the Preprocessor does not outlive the MacroExpansionRecorder.
+  PP->addPPCallbacks(std::make_unique<detail::MacroExpansionRecorderCallback>(
       *PP, *SM, ExpansionRanges));
   // Same applies here.
   PP->setTokenWatcher([this](const Token &Tok) { onTokenLexed(Tok); });
 }
 
 std::optional<StringRef>
-MacroExpansionContext::getExpandedText(SourceLocation MacroExpansionLoc) const {
+MacroExpansionRecorder::getExpandedText(SourceLocation MacroExpansionLoc) const {
   if (MacroExpansionLoc.isMacroID())
     return std::nullopt;
 
@@ -117,7 +123,7 @@ MacroExpansionContext::getExpandedText(SourceLocation MacroExpansionLoc) const {
 }
 
 std::optional<StringRef>
-MacroExpansionContext::getOriginalText(SourceLocation MacroExpansionLoc) const {
+MacroExpansionRecorder::getOriginalText(SourceLocation MacroExpansionLoc) const {
   if (MacroExpansionLoc.isMacroID())
     return std::nullopt;
 
@@ -133,43 +139,14 @@ MacroExpansionContext::getOriginalText(SourceLocation MacroExpansionLoc) const {
       LangOpts);
 }
 
-std::optional<StringRef> MacroExpansionContext::getFormattedExpandedText(
-    SourceLocation MacroExpansionLoc) const {
-  std::optional<StringRef> ExpandedText = getExpandedText(MacroExpansionLoc);
-  if (!ExpandedText)
-    return std::nullopt;
-
-  auto [It, Inserted] =
-      FormattedExpandedTokens.try_emplace(MacroExpansionLoc, "");
-  if (!Inserted)
-    return StringRef(It->getSecond());
-
-  clang::format::FormatStyle Style = clang::format::getLLVMStyle();
-
-  std::string MacroCodeBlock = ExpandedText->str();
-
-  std::vector<clang::tooling::Range> Ranges;
-  Ranges.emplace_back(0, MacroCodeBlock.length());
-
-  clang::tooling::Replacements Replacements = clang::format::reformat(
-      Style, MacroCodeBlock, Ranges, "<macro-expansion>");
-
-  llvm::Expected<std::string> Result =
-      clang::tooling::applyAllReplacements(MacroCodeBlock, Replacements);
-
-  It->getSecond() = Result ? std::move(*Result) : std::move(MacroCodeBlock);
-
-  return StringRef(It->getSecond());
-}
-
-void MacroExpansionContext::dumpExpansionRanges() const {
+void MacroExpansionRecorder::dumpExpansionRanges() const {
   dumpExpansionRangesToStream(llvm::dbgs());
 }
-void MacroExpansionContext::dumpExpandedTexts() const {
+void MacroExpansionRecorder::dumpExpandedTexts() const {
   dumpExpandedTextsToStream(llvm::dbgs());
 }
 
-void MacroExpansionContext::dumpExpansionRangesToStream(raw_ostream &OS) const {
+void MacroExpansionRecorder::dumpExpansionRangesToStream(raw_ostream &OS) const {
   std::vector<std::pair<SourceLocation, SourceLocation>> LocalExpansionRanges;
   LocalExpansionRanges.reserve(ExpansionRanges.size());
   for (const auto &Record : ExpansionRanges)
@@ -187,7 +164,7 @@ void MacroExpansionContext::dumpExpansionRangesToStream(raw_ostream &OS) const {
   }
 }
 
-void MacroExpansionContext::dumpExpandedTextsToStream(raw_ostream &OS) const {
+void MacroExpansionRecorder::dumpExpandedTextsToStream(raw_ostream &OS) const {
   std::vector<std::pair<SourceLocation, MacroExpansionText>>
       LocalExpandedTokens;
   LocalExpandedTokens.reserve(ExpandedTokens.size());
@@ -232,18 +209,23 @@ static void dumpTokenInto(const Preprocessor &PP, raw_ostream &OS, Token Tok) {
   }
 }
 
-void MacroExpansionContext::onTokenLexed(const Token &Tok) {
+void MacroExpansionRecorder::onTokenLexed(const Token &Tok) {
   SourceLocation SLoc = Tok.getLocation();
   if (SLoc.isFileID())
     return;
 
+  // SourceLocation SpellingLoc = SM->getSpellingLoc(SLoc);
+
   LLVM_DEBUG(llvm::dbgs() << "lexed macro expansion token '";
+
              dumpTokenInto(*PP, llvm::dbgs(), Tok); llvm::dbgs() << "' at ";
-             SLoc.print(llvm::dbgs(), *SM); llvm::dbgs() << '\n';);
+             SLoc.print(llvm::dbgs(), *SM);
+             llvm::dbgs() << " " << SLoc.getRawEncoding() << '\n';);
 
   // Remove spelling location.
   SourceLocation CurrExpansionLoc = SM->getExpansionLoc(SLoc);
-
+  llvm::dbgs() << "CurrExpansionLoc: " << CurrExpansionLoc.printToString(*SM)
+               << " " << CurrExpansionLoc.getRawEncoding() << '\n';
   MacroExpansionText TokenAsString;
   llvm::raw_svector_ostream OS(TokenAsString);
 
@@ -259,4 +241,3 @@ void MacroExpansionContext::onTokenLexed(const Token &Tok) {
   if (!Inserted)
     It->getSecond().append(TokenAsString);
 }
-

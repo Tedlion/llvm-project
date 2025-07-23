@@ -9,7 +9,7 @@
 
 #include "ClassWrapperContext.h"
 
-#include "clang/Analysis//MacroExpansionContext.h"
+#include "MacroExpansionRecorder.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Tooling/CompilationDatabase.h"
@@ -72,12 +72,12 @@ struct DeclEntry {
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const RecordDecl &RD,
                                       const CompilerInstance &CI,
-                                      const MacroExpansionContext &MacroContext);
+                                      const MacroExpansionRecorder &MacroRecorder);
 
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const EnumDecl &ED,
                                       const CompilerInstance &CI,
-                                      const MacroExpansionContext &MacroContext);
+                                      const MacroExpansionRecorder &MacroRecorder);
 
 
 // extern hash_code getTokenHash
@@ -156,7 +156,7 @@ private:
   std::vector<DeclEntry> DeclEntries;
 
   const CompilerInstance * CompilerInstancePtr = nullptr;
-  std::unique_ptr<MacroExpansionContext> MacroContext;
+  std::unique_ptr<MacroExpansionRecorder> MacroContext;
 
   DeclScanner(StringRef Target, ArrayRef<std::string> Filename,
                     const ClassWrapperContext &Context);
