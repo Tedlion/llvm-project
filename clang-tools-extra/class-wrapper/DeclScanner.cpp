@@ -49,49 +49,30 @@ static Range getRangeFromChar(const CharSourceRange &CSR,
 
 
 // Ignoring spaces, newlines, comments, and tabs when getting the Hash
-static hash_code getTokenHash(SourceRange SR, const SourceManager &SM,
+// Attention: cannot handle macro expansion
+static hash_code getTokenHash(SourceLocation Begin, SourceLocation End,
+                              const SourceManager &SM,
                               const CompilerInstance &CI) {
   hash_code Hash(0);
 
   Token Tok;
-  bool ReachBegin = false;
-  bool ReachedEnd = false;
 
   Preprocessor &PP = CI.getPreprocessor();
-  SourceLocation Begin = SR.getBegin();
-  SourceLocation End = SR.getEnd();
+  assert(Begin.isFileID());
 
-  llvm::errs() << "RawSrcRange: " << Begin.getRawEncoding() << " " << End.
-      getRawEncoding() << "\n";
+  PP.EnterSourceFile(SM.getFileID(Begin), nullptr, Begin);
 
-  SourceLocation Entrance;
-  if (Begin.isMacroID()) {
-    Entrance = SM.getExpansionLoc(Begin);
-  } else {
-    Entrance = SM.getSpellingLoc(Begin);
-  }
-
-  PP.EnterSourceFile(SM.getFileID(Entrance), nullptr, Begin);
-
-  while (!ReachedEnd) {
+  while (true) {
     PP.Lex(Tok);
-    std::string TokSpelling = PP.getSpelling(Tok);
-    SourceLocation TokLoc = Tok.getLocation();
     if (Tok.is(tok::eof))
       break;
-    if (TokLoc== Begin)
-      ReachBegin = true;
-    if (!ReachBegin) {
-      llvm::errs() << "Skipping token '"
-          << TokSpelling << "' at " << TokLoc.printToString(SM)
-          <<" " << TokLoc.getRawEncoding() << "\n";
-      continue;;
-    }
+    std::string TokSpelling = PP.getSpelling(Tok);
+    SourceLocation TokLoc = Tok.getLocation();
     llvm::errs() << "Hash token: '" << TokSpelling << "' at "
         << TokLoc.printToString(SM) << " " << TokLoc.getRawEncoding() << "\n";
     Hash = hash_combine(Hash, TokSpelling);
-    if (Tok.getLocation() == End)
-      ReachedEnd = true;
+    if (TokLoc == End)
+      break;
   }
 
   llvm::errs() << "Hash:" << hash_value(Hash) << "\n";
@@ -147,6 +128,41 @@ static bool checkExpansion(SourceRange AssociatedRange,
 }
 
 
+namespace {
+
+class ExpansionTokenReader {
+  std::string ExpansionText;
+  SourceLocation Begin;
+  SourceLocation End;
+  SourceLocation TextBegin;
+  SourceLocation CurrentLoc;
+
+public:
+  Token getToken(){
+
+  }
+
+  StringRef getText() {
+
+  }
+};
+
+} // namespace
+
+
+
+static std::tuple<std::string/*Expansion*/,
+                  hash_code, SmallVector<unsigned, 4>/*Offsets*/>
+expandOnLocations(const SmallSet<SourceLocation, 3> &ExpansionLocs,
+                  SourceLocation HashBegin, SourceLocation HashEnd,
+                  const SmallVectorImpl<SourceLocation> &OffsetQueries,
+                  const SourceManager &SM) {
+  std::string Expansion;
+  hash_code Hash(0);
+  SmallVector<unsigned, 4> Offsets;
+}
+
+
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const RecordDecl &RD,
                                       const CompilerInstance &CI,
@@ -157,40 +173,57 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
   }
 
   // TODO: nested case
-
   const SourceManager &SM = *Result.SourceManager;
   DeclEntry D;
+
+  RD.dump();
+  SourceRange SR = RD.getSourceRange();
+  SourceLocation SBegin = SR.getBegin();
+  SourceLocation SEnd = SR.getEnd();
+
+  SR.print(llvm::errs(), SM);
+  llvm::errs() << "\n";
 
   D.Name = RD.getName().str();
   D.FilePath = SM.getFilename(RD.getBeginLoc()).str();
   D.Kind = RD.getKind();
   D.Storage = SC_None;
   D.isUnion = RD.isUnion();
-
-  RD.dump();
-  SourceRange SR = RD.getSourceRange();
-  SR.print(llvm::errs(), SM);
-  llvm::errs() << "\n";
-
   D.IsDefinition = RD.isCompleteDefinition();
-  if (D.IsDefinition) {
-    D.ImplHash = getTokenHash(SR, SM, CI);
-  }
+
+  SmallSet<SourceLocation, 3> ExpansionLocs;
+  if (SBegin.isMacroID())
+    ExpansionLocs.insert(SM.getExpansionLoc(SBegin));
+  if (SEnd.isMacroID())
+    ExpansionLocs.insert(SM.getExpansionLoc(SEnd));
 
   SourceLocation NameLoc;
   if (const auto *Id = RD.getIdentifier()) {
     NameLoc = RD.getLocation();
     unsigned NameBegin = SM.getFileOffset(NameLoc);
     D.NameRange = Range(NameBegin, Id->getLength());
+    if (NameLoc.isMacroID())
+      ExpansionLocs.insert(SM.getExpansionLoc(NameLoc));
   } else {
     D.isAnonymous = true;
   }
 
-  CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
-  if (AssociatedRange.isInvalid()) {
-    AssociatedRange = CharSourceRange::getTokenRange(SR);
+  if (ExpansionLocs.empty()) {
+    if (D.IsDefinition) {
+      D.ImplHash = getTokenHash(SBegin, SEnd, SM, CI);
+    }
+    CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
+    if (AssociatedRange.isInvalid()) {
+      AssociatedRange = CharSourceRange::getTokenRange(SR);
+    }
+    D.FullRange = getRangeFromChar(AssociatedRange, SM);
+  } else {
+    D.Expansion = expandOnLocations(ExpansionLocs, );
+
+
   }
-  D.FullRange = getRangeFromChar(AssociatedRange, SM);
+
+
 
   checkExpansion(SR, NameLoc, SM, CI, MacroRecorder, D.Expansion, D.ExpansionReplaced);
 

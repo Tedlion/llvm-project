@@ -72,6 +72,14 @@ public:
     ArrayRef<TokenSpellingLoc> Tokens;
     unsigned BeginOffset;
 
+
+    ExpansionTokens(StringRef ExpansionText,
+                    ArrayRef<TokenSpellingLoc> Tokens,
+                    unsigned BeginOffset)
+      : ExpansionText(ExpansionText), Tokens(Tokens),
+        BeginOffset(BeginOffset) {
+    }
+
   public:
     class iterator {
       friend class ExpansionTokens;
@@ -109,12 +117,12 @@ public:
     };
 
 
-    iterator begin() {
+    iterator begin() const {
       return iterator(Tokens.begin(), BeginOffset, ExpansionText);
     }
 
 
-    iterator end() {
+    iterator end() const {
       return iterator(Tokens.end(), 0, ExpansionText);
     }
 
@@ -159,7 +167,9 @@ public:
 private:
   friend class detail::MacroExpansionRecorderCallback;
   using MacroExpansionText = SmallString<40>;
-  using ExpansionMap = llvm::DenseMap<SourceLocation, MacroExpansionText>;
+  using TokenList = SmallVector<TokenSpellingLoc, 8>;
+  using ExpansionMap = llvm::DenseMap<
+    SourceLocation, std::pair<MacroExpansionText, TokenList> >;
   using ExpansionRangeMap = llvm::DenseMap<SourceLocation, SourceLocation>;
 
   /// Associates the textual representation of the expanded tokens at the given

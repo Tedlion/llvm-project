@@ -10,10 +10,10 @@
 #include "MacroExpansionRecorder.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
+#include <algorithm>
 
 #define DEBUG_TYPE "macro-expansion-recorder"
 #define LLVM_DEBUG(x) x
-
 
 static void dumpTokenInto(const clang::Preprocessor &PP, llvm::raw_ostream &OS,
                           clang::Token Tok);
@@ -119,7 +119,7 @@ MacroExpansionRecorder::getExpandedText(SourceLocation MacroExpansionLoc) const 
     return StringRef{""};
 
   // Otherwise we have the actual token sequence as string.
-  return It->getSecond().str();
+  return It->getSecond().first.str();
 }
 
 std::optional<StringRef>
@@ -170,7 +170,7 @@ void MacroExpansionRecorder::dumpExpandedTextsToStream(raw_ostream &OS) const {
   LocalExpandedTokens.reserve(ExpandedTokens.size());
   for (const auto &Record : ExpandedTokens)
     LocalExpandedTokens.emplace_back(
-        std::make_pair(Record.getFirst(), Record.getSecond()));
+        std::make_pair(Record.getFirst(), Record.getSecond().first));
   llvm::sort(LocalExpandedTokens);
 
   OS << "\n=============== ExpandedTokens ===============\n";
@@ -217,7 +217,6 @@ void MacroExpansionRecorder::onTokenLexed(const Token &Tok) {
   // SourceLocation SpellingLoc = SM->getSpellingLoc(SLoc);
 
   LLVM_DEBUG(llvm::dbgs() << "lexed macro expansion token '";
-
              dumpTokenInto(*PP, llvm::dbgs(), Tok); llvm::dbgs() << "' at ";
              SLoc.print(llvm::dbgs(), *SM);
              llvm::dbgs() << " " << SLoc.getRawEncoding() << '\n';);
@@ -226,18 +225,81 @@ void MacroExpansionRecorder::onTokenLexed(const Token &Tok) {
   SourceLocation CurrExpansionLoc = SM->getExpansionLoc(SLoc);
   llvm::dbgs() << "CurrExpansionLoc: " << CurrExpansionLoc.printToString(*SM)
                << " " << CurrExpansionLoc.getRawEncoding() << '\n';
-  MacroExpansionText TokenAsString;
-  llvm::raw_svector_ostream OS(TokenAsString);
 
-  // FIXME: Prepend newlines and space to produce the exact same output as the
-  // preprocessor would for this token.
+  auto trackDumpTokenInfo = [&PP = PP, &Tok, SLoc](
+      MacroExpansionText &TokenAsString, TokenList &Tokens) {
+    llvm::raw_svector_ostream OS(TokenAsString);
+    unsigned LengthBefore = TokenAsString.size();
+    dumpTokenInto(*PP, OS, Tok);
+    unsigned LengthAfter = TokenAsString.size();
+    if (LengthAfter == LengthBefore)
+      return;
+    Tokens.emplace_back(SLoc, LengthAfter, TokenAsString[LengthBefore] == ' ');
+  };
 
-  dumpTokenInto(*PP, OS, Tok);
+  if (auto it = ExpandedTokens.find(CurrExpansionLoc);
+    it != ExpandedTokens.end()) {
+    auto &[TokenAsString, Tokens] = it->getSecond();
+    trackDumpTokenInfo(TokenAsString, Tokens);
+  } else {
+    MacroExpansionText TokenAsString;
+    TokenList Tokens;
+    trackDumpTokenInfo(TokenAsString, Tokens);
+    ExpandedTokens.try_emplace(CurrExpansionLoc,
+      std::make_pair(std::move(TokenAsString), std::move(Tokens)));
+  }
+}
 
-  ExpansionMap::iterator It;
-  bool Inserted;
-  std::tie(It, Inserted) =
-      ExpandedTokens.try_emplace(CurrExpansionLoc, std::move(TokenAsString));
-  if (!Inserted)
-    It->getSecond().append(TokenAsString);
+
+std::optional<MacroExpansionRecorder::ExpansionTokens>
+MacroExpansionRecorder::getExpansionTokensWithin(SourceLocation MacroExpansionLoc,
+                      SourceLocation Begin, SourceLocation End) const {
+  if (MacroExpansionLoc.isMacroID())
+    return std::nullopt;
+
+  // If there was no macro expansion at that location, return std::nullopt.
+  if (ExpansionRanges.find_as(MacroExpansionLoc) == ExpansionRanges.end())
+    return std::nullopt;
+
+  // There was macro expansion, but resulted in no tokens, return empty string.
+  const auto It = ExpandedTokens.find_as(MacroExpansionLoc);
+  if (It == ExpandedTokens.end())
+    return std::nullopt;
+
+  const auto & [TokenAsString, Tokens] = It->getSecond();
+  auto BeginIt = Begin.isInvalid()
+                   ? std::ranges::find(Tokens, Begin, &TokenSpellingLoc::Loc)
+                   : Tokens.begin();
+
+  auto EndIt = End.isInvalid()
+                 ? std::ranges::find(Tokens, End, &TokenSpellingLoc::Loc)
+                 : Tokens.end();
+
+  if (BeginIt == Tokens.end() || EndIt == Tokens.end() || BeginIt > EndIt) {
+    return std::nullopt;
+  }
+
+  // Token's SourceLocation is not guaranteed to be globally unique,
+  // return std::nullopt if the Beginning or End location is not unique.
+  if (Begin.isInvalid()) {
+    if (auto SecondMatch = std::ranges::find(
+          std::next(BeginIt), Tokens.end(), Begin, &TokenSpellingLoc::Loc);
+      SecondMatch != Tokens.end()) {
+      return std::nullopt;
+    }
+  }
+  if (End.isInvalid()) {
+    if (auto SecondMatch = std::ranges::find(
+          std::next(EndIt), Tokens.end(), End, &TokenSpellingLoc::Loc);
+      SecondMatch != Tokens.end()) {
+      return std::nullopt;
+    }
+  }
+
+  unsigned BeginOffset = BeginIt == Tokens.begin()
+                             ? 0
+                             : std::prev(BeginIt)->EndingOffset;
+
+  return ExpansionTokens(TokenAsString, ArrayRef(BeginIt, std::next(EndIt)),
+                         BeginOffset);
 }
