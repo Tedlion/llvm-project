@@ -11,6 +11,7 @@ add_clang_library(classWrapper
         DeclScanner.cpp
         FileFilter.cpp
         ClassWrapperContext.cpp
+        MacroExpansionRecorder.cpp
 )
 
 target_compile_definitions(classWrapper PRIVATE _SILENCE_CXX23_ALIGNED_UNION_DEPRECATION_WARNING)
