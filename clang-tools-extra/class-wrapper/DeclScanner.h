@@ -57,10 +57,11 @@ struct DeclEntry {
   hash_code InfHash{0};   // for function only
   hash_code ImplHash{0};
 
+  uint64_t NeedExpansion  : 1 = false; // Fails to expand the macro
   uint64_t IsDefinition   : 1;
   uint64_t IsInline       : 1 = false; // for function only
-  uint64_t isAnonymous    : 1 = false; // for record only
-  uint64_t isUnion        : 1 = false;
+  uint64_t IsAnonymous    : 1 = false; // for record only
+  uint64_t IsUnion        : 1 = false;
 
   SmallVector<RefEntry, 4> InfRefs;  // the symbols used in the declaration
   SmallVector<RefEntry, 4> ImplRefs; // the symbols used in the definition
