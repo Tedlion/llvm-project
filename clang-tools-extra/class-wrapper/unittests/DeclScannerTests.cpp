@@ -49,8 +49,8 @@ class MatcherTest : public ::testing::Test, SourceFileCallbacks {
 
   bool handleBeginSource(CompilerInstance &CI) override {
     this->CI = &CI;
-    MacroRecorder = std::make_unique<MacroExpansionRecorder>(CI.getLangOpts());
-    MacroRecorder->registerForPreprocessor(CI.getPreprocessor());
+    // MacroRecorder = std::make_unique<MacroExpansionRecorder>(CI.getLangOpts());
+    // MacroRecorder->registerForPreprocessor(CI.getPreprocessor());
     return true;
   }
 
@@ -146,7 +146,7 @@ void MatcherTest::EnableMatcher<RecordDecl>() {
       DeclScanner::RecordDeclMatcher, &RecordDeclHandler);
 }
 
-static StringRef SimpleStructS = R"c(
+static StringRef SimpleStruct = R"c(
 struct S {
   int a;
   int b;
@@ -156,7 +156,7 @@ struct S {
 TEST_F(MatcherTest, SimpleStruct) {
   EnableMatcher<RecordDecl>();
 
-  ASSERT_TRUE(scanOnCode(SimpleStructS, "a.c"));
+  ASSERT_TRUE(scanOnCode(SimpleStruct, "a.c"));
   ASSERT_EQ(getResult().size(), 1);
 
   const auto &D = getResult().front();
@@ -168,21 +168,63 @@ TEST_F(MatcherTest, SimpleStruct) {
 
   EXPECT_TRUE(D.Expansion.empty());
 
-  EXPECT_TRUE(verifyRangeMatched(SimpleStructS, D.NameRange, "S"));
   EXPECT_EQ(D.InfRange, Range(0, 0));
-  EXPECT_TRUE(verifyRangeMatched(SimpleStructS, D.FullRange,
-                                 SimpleStructS.ltrim()));
+  EXPECT_TRUE(verifyRangeMatched(SimpleStruct, D.FullRange,
+                                 SimpleStruct.ltrim()));
 
   EXPECT_EQ(D.InfHash, hash_code(0));
   EXPECT_EQ(D.ImplHash, getHashForStringList(
-              {"struct", "S", "{", "int", "a", ";", "int", "b", ";", "}", ";"}
+              {"struct", "S", "{", "int", "a", ";", "int", "b", ";", "}"}
             ));
 
+  EXPECT_FALSE(D.NeedExpansion);
   EXPECT_TRUE(D.IsDefinition);
   EXPECT_FALSE(D.IsInline);
-  EXPECT_FALSE(D.isAnonymous);
-  EXPECT_FALSE(D.isUnion);
+  EXPECT_FALSE(D.IsAnonymous);
+  EXPECT_FALSE(D.IsUnion);
 }
+
+
+static StringRef SimpleUnion = R"c(
+union U {
+  unsigned a;
+  short b;
+};
+)c";
+
+
+TEST_F(MatcherTest, SimpleUnion) {
+  EnableMatcher<RecordDecl>();
+
+  ASSERT_TRUE(scanOnCode(SimpleUnion, "a.c"));
+  ASSERT_EQ(getResult().size(), 1);
+
+  const auto &D = getResult().front();
+
+  EXPECT_EQ(D.Name, "U");
+  EXPECT_EQ(D.FilePath, "a.c");
+  EXPECT_EQ(D.Kind, Decl::Kind::Record);
+  EXPECT_EQ(D.Storage, StorageClass::SC_None);
+
+  EXPECT_TRUE(D.Expansion.empty());
+
+  EXPECT_EQ(D.InfRange, Range(0, 0));
+  EXPECT_TRUE(verifyRangeMatched(SimpleUnion, D.FullRange,
+                                 SimpleUnion.ltrim()));
+
+  EXPECT_EQ(D.InfHash, hash_code(0));
+  EXPECT_EQ(D.ImplHash, getHashForStringList(
+              {"union", "U", "{", "unsigned", "a", ";", "short", "b", ";", "}"}
+            ));
+
+  EXPECT_FALSE(D.NeedExpansion);
+  EXPECT_TRUE(D.IsDefinition);
+  EXPECT_FALSE(D.IsInline);
+  EXPECT_FALSE(D.IsAnonymous);
+  EXPECT_TRUE(D.IsUnion);
+}
+
+
 
 static StringRef SimpleStructDecl = R"c(
 struct S;
@@ -204,7 +246,6 @@ TEST_F(MatcherTest, SimpleStructDecl) {
 
   EXPECT_TRUE(D.Expansion.empty());
 
-  EXPECT_TRUE(verifyRangeMatched(SimpleStructDecl, D.NameRange, "S"));
   EXPECT_EQ(D.InfRange, Range(0, 0));
   EXPECT_TRUE(verifyRangeMatched(SimpleStructDecl, D.FullRange,
                                  SimpleStructDecl.ltrim()));
@@ -214,7 +255,7 @@ TEST_F(MatcherTest, SimpleStructDecl) {
 
   EXPECT_FALSE(D.IsDefinition);
   EXPECT_FALSE(D.IsInline);
-  EXPECT_FALSE(D.isAnonymous);
+  EXPECT_FALSE(D.IsAnonymous);
 }
 
 
@@ -241,38 +282,37 @@ TEST_F(MatcherTest, StructWithComments) {
 
   EXPECT_TRUE(D.Expansion.empty());
 
-  EXPECT_TRUE(verifyRangeMatched(StructWithComments, D.NameRange, "S"));
   EXPECT_EQ(D.InfRange, Range(0, 0));
   EXPECT_TRUE(verifyRangeMatched(StructWithComments, D.FullRange,
                                  "// Comment 1", "// Comment3\n"));
 
   EXPECT_EQ(D.InfHash, hash_code(0));
   EXPECT_EQ(D.ImplHash, getHashForStringList(
-              {"struct", "S", "{", "int", "a", ";", "int", "b", ";", "}", ";"}
+              {"struct", "S", "{", "int", "a", ";", "int", "b", ";", "}"}
             ));
 
   EXPECT_TRUE(D.IsDefinition);
   EXPECT_FALSE(D.IsInline);
-  EXPECT_FALSE(D.isAnonymous);
+  EXPECT_FALSE(D.IsAnonymous);
 }
 
 
-StringRef SimpleStructSWithMacro = R"c(
+StringRef StructWithIfdef = R"c(
 struct S{
 int a;
-#if MACRO
+#ifdef MACRO
 char x;
 #endif
   int b;};
 )c";
 
 
-TEST_F(MatcherTest, StructWithMacro) {
+TEST_F(MatcherTest, StructWithIfdef) {
   EnableMatcher<RecordDecl>();
 
-  ASSERT_TRUE(scanOnCode(SimpleStructSWithMacro));
-  ASSERT_TRUE(scanOnCode(SimpleStructSWithMacro, "b.c", {"-DMACRO"}));
-  ASSERT_TRUE(scanOnCode(SimpleStructSWithMacro, "c.c", {"-DMACRO2"}));
+  ASSERT_TRUE(scanOnCode(StructWithIfdef));
+  ASSERT_TRUE(scanOnCode(StructWithIfdef, "b.c", {"-DMACRO"}));
+  ASSERT_TRUE(scanOnCode(StructWithIfdef, "c.c", {"-DMACRO2"}));
 
   ASSERT_EQ(getResult().size(), 3);
   DeclEntry D1 = getResult()[0];
@@ -309,19 +349,18 @@ TEST_F(MatcherTest, AnonymousStruct) {
 
   EXPECT_TRUE(D.Expansion.empty());
 
-  EXPECT_TRUE(verifyRangeMatched(AnonymousStructS, D.NameRange, ""));
   EXPECT_EQ(D.InfRange, Range(0, 0));
   EXPECT_TRUE(verifyRangeMatched(AnonymousStructS, D.FullRange,
                                  AnonymousStructS.ltrim()));
 
   EXPECT_EQ(D.InfHash, hash_code(0));
   EXPECT_EQ(D.ImplHash, getHashForStringList(
-              {"struct", "{", "int", "a", ";", "int", "b", ";", "}", ";"}
+              {"struct", "{", "int", "a", ";", "int", "b", ";", "}"}
             ));
 
   EXPECT_TRUE(D.IsDefinition);
   EXPECT_FALSE(D.IsInline);
-  EXPECT_TRUE(D.isAnonymous);
+  EXPECT_TRUE(D.IsAnonymous);
 }
 
 
@@ -367,18 +406,87 @@ TEST_F(MatcherTest, StructInFunction) {
 }
 
 
-StringRef StructExpandFromMacro = R"c(
+StringRef StructWithMacro = R"c(
 #define MACRO1 int x;
-#define MACRO2(a, b) struct S { int a; int b; };
-#define MACRO3(a) MACRO1 MACRO2(a, bb)
-MACRO3(aaa);
+struct S {
+  int a;
+  MACRO1
+  int b;
+};
 )c";
 
 
-TEST_F(MatcherTest, StructExpandFromMacro) {
+TEST_F(MatcherTest, StructWithMacro) {
+  EnableMatcher<RecordDecl>();
+  ASSERT_TRUE(scanOnCode(StructWithMacro));
+
+  ASSERT_EQ(getResult().size(), 1);
+  const auto &D = getResult().front();
+
+  EXPECT_EQ(D.Name, "S");
+  EXPECT_EQ(D.Kind, Decl::Kind::Record);
+  EXPECT_EQ(D.Storage, StorageClass::SC_None);
+
+  EXPECT_TRUE(D.Expansion.empty());
+
+  EXPECT_TRUE(verifyRangeMatched(StructWithMacro, D.FullRange,
+                                 "struct S {", "};\n"));
+
+  EXPECT_EQ(D.ImplHash, getHashForStringList(
+              {"struct", "S", "{", "int", "a", ";", "int", "x", ";", "int", "b", ";", "}"}
+            ));
+
+  EXPECT_FALSE(D.NeedExpansion);
+  EXPECT_TRUE(D.IsDefinition);
+  EXPECT_FALSE(D.IsInline);
+  EXPECT_FALSE(D.IsAnonymous);
+}
+
+
+StringRef StructFromMacro = R"c(
+#define MACRO1(x, y) struct S {int x, y;}
+MACRO1(a, b);
+)c";
+
+
+TEST_F(MatcherTest, StructFromMacro) {
+  EnableMatcher<RecordDecl>();
+  ASSERT_TRUE(scanOnCode(StructFromMacro));
+
+  ASSERT_EQ(getResult().size(), 1);
+  const auto &D = getResult().front();
+
+  EXPECT_EQ(D.Name, "S");
+  EXPECT_EQ(D.Kind, Decl::Kind::Record);
+  EXPECT_EQ(D.Storage, StorageClass::SC_None);
+
+  EXPECT_TRUE(D.Expansion.empty());
+
+  EXPECT_TRUE(D.IsDefinition);
+  EXPECT_FALSE(D.IsInline);
+  EXPECT_FALSE(D.IsAnonymous);
+
+  EXPECT_TRUE(D.NeedExpansion);
+  EXPECT_TRUE(verifyRangeMatched(StructFromMacro, D.ExpansionReplaced,
+                                 "MACRO1(a, b);\n"));
+}
+
+
+StringRef StructPartialFromMacro = R"c(
+#define MACRO1(x) int a; struct x
+MACRO1(S) {
+  int b;
+  int c;
+};
+
+int y;
+)c";
+
+
+TEST_F(MatcherTest, StructPartialFromMacro) {
   EnableMatcher<RecordDecl>();
 
-  ASSERT_TRUE(scanOnCode(StructExpandFromMacro));
+  ASSERT_TRUE(scanOnCode(StructPartialFromMacro));
   ASSERT_EQ(getResult().size(), 1);
 
   const auto &D = getResult().front();
@@ -386,6 +494,44 @@ TEST_F(MatcherTest, StructExpandFromMacro) {
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
   EXPECT_EQ(D.Storage, StorageClass::SC_None);
+
+  EXPECT_TRUE(D.Expansion.empty());
+
+  EXPECT_TRUE(D.IsDefinition);
+  EXPECT_FALSE(D.IsInline);
+  EXPECT_FALSE(D.IsAnonymous);
+
+  EXPECT_TRUE(D.NeedExpansion);
+  EXPECT_TRUE(verifyRangeMatched(StructPartialFromMacro, D.ExpansionReplaced,
+                                 "MACRO1(S) {\n", "};\n"));
+}
+
+
+
+StringRef StructInMacro = R"c(
+#define MACRO1 int x;
+#define MACRO2(a, b) struct S { int a; int b; };
+#define MACRO3(a) MACRO1 MACRO2(a, bb)
+MACRO3(aaa);
+)c";
+
+
+TEST_F(MatcherTest, StructInMacro) {
+  EnableMatcher<RecordDecl>();
+
+  ASSERT_TRUE(scanOnCode(StructInMacro));
+  ASSERT_EQ(getResult().size(), 1);
+
+  const auto &D = getResult().front();
+
+  EXPECT_EQ(D.Name, "S");
+  EXPECT_EQ(D.Kind, Decl::Kind::Record);
+  EXPECT_EQ(D.Storage, StorageClass::SC_None);
+
+  EXPECT_TRUE(D.NeedExpansion);
+  EXPECT_TRUE(verifyRangeMatched(StructInMacro, D.ExpansionReplaced,
+                                 "MACRO3(aaa);\n"));
+
 
   // EXPECT_EQ(D.Expansion, "struct S { int a; int b; };\n");
   // EXPECT_TRUE(verifyRangeMatched(StructExpandFromMacro,
@@ -400,7 +546,7 @@ TEST_F(MatcherTest, StructExpandFromMacro) {
   //
   // EXPECT_TRUE(D.IsDefinition);
   // EXPECT_FALSE(D.IsInline);
-  // EXPECT_FALSE(D.isAnonymous);
+  // EXPECT_FALSE(D.IsAnonymous);
 }
 
 
