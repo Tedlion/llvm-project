@@ -164,8 +164,8 @@ expandOnLocations(const SmallSet<SourceLocation, 3> &ExpansionLocs,
 
 
 static CharSourceRange getFullRange(SourceRange SR,
-                                          const SourceManager &SM,
-                                          const LangOptions &LangOpts) {
+                                    const SourceManager &SM,
+                                    const LangOptions &LangOpts) {
   llvm::errs() << "SourceRange: " << SR.printToString(SM) << "\n";
   CharSourceRange Range = CharSourceRange::getCharRange(SR);
   if (SR.getBegin().isMacroID())
@@ -181,42 +181,71 @@ static CharSourceRange getFullRange(SourceRange SR,
   std::pair<FileID, unsigned> LocInfo = SM.getDecomposedLoc(End);
   bool Invalid = false;
   StringRef Buffer = SM.getBufferData(LocInfo.first, &Invalid);
-  if (!Invalid) {
-    Token Tok;
-    const char *StrData = Buffer.data() + LocInfo.second;
-    Lexer TheLexer(SM.getLocForStartOfFile(LocInfo.first), LangOpts,
-                   Buffer.begin(), StrData, Buffer.end());
-    TheLexer.SetCommentRetentionState(true);
 
-    // FIXME: check spaces before calling LexFromRawLexer
-    while (!TheLexer.LexFromRawLexer(Tok)) {
-      llvm::errs() << "Token: " << Tok.getName() << " at "
-                  << Tok.getLocation().printToString(SM) << "\n";
-      if (Tok.is(tok::semi) || Tok.is(tok::comment)) {
-        End = Tok.getEndLoc();
-      } else if ( Tok.is(tok::unknown)) {
-        End = Tok.getEndLoc();
-        const char * Character = SM.getCharacterData(Tok.getLocation(), &Invalid);
-        if (isVerticalWhitespace(*Character))
-          break;
-      } else
-        break;
+  if (Invalid) {
+    Range.setEnd(End);
+    llvm::errs() << "Buffer Invalid, Full Range: " << Range.getAsRange().
+        printToString(SM) << "\n";
+    return Range;
+  }
+
+  Token Tok;
+  const char *StrData = Buffer.data() + LocInfo.second;
+  Lexer TheLexer(SM.getLocForStartOfFile(LocInfo.first), LangOpts,
+                 Buffer.begin(), StrData, Buffer.end());
+  TheLexer.SetCommentRetentionState(true);
+
+  while (!TheLexer.LexFromRawLexer(Tok)) {
+    llvm::errs() << "Token: " << Tok.getName() << " at "
+        << Tok.getLocation().printToString(SM) << "\n";
+    if (Tok.is(tok::semi) || Tok.is(tok::comment)) {
+      End = Tok.getEndLoc();
+    } else {
+      break;
+    }
+  }
+
+  StrData = Buffer.data() + SM.getFileOffset(End);
+
+  while (true) {
+    if (isHorizontalWhitespace(*StrData)) {
+      ++StrData;
+      End = End.getLocWithOffset(1);
+    } else if (isVerticalWhitespace(*StrData)) {
+      ++StrData;
+      End = End.getLocWithOffset(1);
+      break;
+    } else {
+      break;
     }
   }
 
   Range.setEnd(End);
-  llvm::errs() << "Full Range: " << Range.getAsRange().printToString(SM) << "\n";
+  llvm::errs() << "Full Range: " << Range.getAsRange().printToString(SM) <<
+      "\n";
   return Range;
 }
+
+
 
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const RecordDecl &RD,
                                       const CompilerInstance &CI,
                                       const MacroExpansionRecorder &MacroRecorder) {
   // Ignore RecordDecl in local scope
-  if (RD.getDeclContext()->isFunctionOrMethod()) {
+  const DeclContext * DC = RD.getDeclContext();
+  if (DC->isFunctionOrMethod()) {
     return std::nullopt;
   }
+
+  // FIXME: Strictly speaking, we have to capture the nested RecordDecls.
+  //  Supposing there is a `struct Inner` nested in `struct Outer`,
+  //  using `struct Inner` is valid in C but only `Outer::Inner` is valid in C++
+  //  Ignore it for now, since no occurrences in target codebase.
+  const auto &Parents = Result.Context->getParents(RD);
+  assert(Parents.size() == 1);
+  if (!Parents[0].get<TranslationUnitDecl>())
+    return std::nullopt;
 
   // TODO: nested case
   const SourceManager &SM = *Result.SourceManager;
@@ -234,7 +263,6 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
   D.IsAnonymous = D.Name.empty();
   D.FilePath = SM.getFilename(RD.getBeginLoc()).str();
   D.Kind = RD.getKind();
-  D.Storage = SC_None;
   D.IsUnion = RD.isUnion();
   D.IsDefinition = RD.isCompleteDefinition();
   CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
@@ -250,6 +278,20 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
   if (D.IsDefinition)
     D.ImplHash = getTokenHash(SBegin, SEnd, SM, CI);
   D.FullRange = getRangeFromAssociated(AssociatedRange, SM);
+
+  SmallSet<const RecordDecl *, 8> NestedDecls;
+  NestedDecls.insert(&RD);
+  for (const FieldDecl *Field : RD.fields()) {
+    llvm::errs() << "Field: " << Field->getName() << "\n";
+    // if (const auto *RT = Field->getType()->getAs<RecordType>()) {
+    //   if (const RecordDecl *NestedRD = RT->getDecl()) {
+    //     if (NestedRD->getDeclContext() == &RD) {
+    //       NestedDecls.insert(NestedRD);
+    //     }
+    //   }
+    // }
+  }
+
 
   return D;
 

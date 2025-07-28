@@ -164,7 +164,7 @@ TEST_F(MatcherTest, SimpleStruct) {
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.FilePath, "a.c");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
-  EXPECT_EQ(D.Storage, StorageClass::SC_None);
+  EXPECT_FALSE(D.IsStatic);
 
   EXPECT_TRUE(D.Expansion.empty());
 
@@ -204,7 +204,6 @@ TEST_F(MatcherTest, SimpleUnion) {
   EXPECT_EQ(D.Name, "U");
   EXPECT_EQ(D.FilePath, "a.c");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
-  EXPECT_EQ(D.Storage, StorageClass::SC_None);
 
   EXPECT_TRUE(D.Expansion.empty());
 
@@ -242,7 +241,6 @@ TEST_F(MatcherTest, SimpleStructDecl) {
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.FilePath, "a.c");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
-  EXPECT_EQ(D.Storage, StorageClass::SC_None);
 
   EXPECT_TRUE(D.Expansion.empty());
 
@@ -278,7 +276,6 @@ TEST_F(MatcherTest, StructWithComments) {
 
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
-  EXPECT_EQ(D.Storage, StorageClass::SC_None);
 
   EXPECT_TRUE(D.Expansion.empty());
 
@@ -345,7 +342,6 @@ TEST_F(MatcherTest, AnonymousStruct) {
 
   EXPECT_EQ(D.Name, "");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
-  EXPECT_EQ(D.Storage, StorageClass::SC_None);
 
   EXPECT_TRUE(D.Expansion.empty());
 
@@ -369,6 +365,7 @@ struct S1 {
     struct S2 {
         int x;
     } a;
+  int y;
 };
 )c";
 
@@ -377,10 +374,15 @@ TEST_F(MatcherTest, NestedStruct) {
   EnableMatcher<RecordDecl>();
 
   ASSERT_TRUE(scanOnCode(NestedStruct));
-  ASSERT_EQ(getResult().size(), 2);
+  ASSERT_EQ(getResult().size(), 1);
 
-  const auto &D1 = getResult()[0];
-  const auto &D2 = getResult()[1];
+  const auto &D = getResult().front();
+  EXPECT_EQ(D.Name, "S1");
+  EXPECT_TRUE(verifyRangeMatched(NestedStruct, D.FullRange,
+                               NestedStruct.ltrim()));
+  EXPECT_EQ(D.ImplHash, getHashForStringList(
+              {"struct", "S1", "{", "struct", "S2", "{", "int", "x", ";", "}",
+              "a", ";", "int", "y", ";", "}"} ));
 };
 
 
@@ -425,7 +427,6 @@ TEST_F(MatcherTest, StructWithMacro) {
 
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
-  EXPECT_EQ(D.Storage, StorageClass::SC_None);
 
   EXPECT_TRUE(D.Expansion.empty());
 
@@ -458,7 +459,6 @@ TEST_F(MatcherTest, StructFromMacro) {
 
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
-  EXPECT_EQ(D.Storage, StorageClass::SC_None);
 
   EXPECT_TRUE(D.Expansion.empty());
 
@@ -493,7 +493,6 @@ TEST_F(MatcherTest, StructPartialFromMacro) {
 
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
-  EXPECT_EQ(D.Storage, StorageClass::SC_None);
 
   EXPECT_TRUE(D.Expansion.empty());
 
@@ -526,7 +525,6 @@ TEST_F(MatcherTest, StructInMacro) {
 
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
-  EXPECT_EQ(D.Storage, StorageClass::SC_None);
 
   EXPECT_TRUE(D.NeedExpansion);
   EXPECT_TRUE(verifyRangeMatched(StructInMacro, D.ExpansionReplaced,
