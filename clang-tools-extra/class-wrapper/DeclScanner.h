@@ -26,12 +26,13 @@ using internal::Matcher;
 struct RefEntry {
   std::string Name;
   Decl::Kind Kind;
-  StorageClass Storage = SC_Extern;
 
   // points to the SameRange of DeclEntry, only set when UsedAsFunctionPtr
   Range Range;
 
-  bool UsedAsFunctionPtr = false;
+  unsigned IsStatic              : 1 = false;
+  unsigned UsedAsFunctionPtr     : 1 = false;
+  unsigned Nested                : 1 = false; // Dependent type is nested in struct
 };
 
 
@@ -39,7 +40,6 @@ struct DeclEntry {
   std::string Name;
   std::string FilePath; // source file's path relative to SourceRoot
   Decl::Kind Kind;
-  StorageClass Storage;
 
   // The Expansion is only necessary when:
   // 1. Larger than the Decl, or
@@ -57,14 +57,15 @@ struct DeclEntry {
   hash_code InfHash{0};   // for function only
   hash_code ImplHash{0};
 
-  uint64_t NeedExpansion  : 1 = false; // Fails to expand the macro
-  uint64_t IsDefinition   : 1;
-  uint64_t IsInline       : 1 = false; // for function only
-  uint64_t IsAnonymous    : 1 = false; // for record only
-  uint64_t IsUnion        : 1 = false;
+  unsigned IsStatic       : 1 = false; // for functions and variables only
+  unsigned NeedExpansion  : 1 = false; // Fails to expand the macro
+  unsigned IsDefinition   : 1;
+  unsigned IsInline       : 1 = false; // for function only
+  unsigned IsAnonymous    : 1 = false; // for record only
+  unsigned IsUnion        : 1 = false;
 
-  SmallVector<RefEntry, 4> InfRefs;  // the symbols used in the declaration
-  SmallVector<RefEntry, 4> ImplRefs; // the symbols used in the definition
+  SmallSet<RefEntry, 4> InfRefs;  // the symbols used in the declaration
+  SmallSet<RefEntry, 4> ImplRefs; // the symbols used only in the definition
 
   bool operator==(const DeclEntry &) const = default;
 };
