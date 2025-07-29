@@ -24,7 +24,6 @@ using namespace llvm;
 using internal::Matcher;
 
 struct RefEntry {
-  std::string Name;
   Decl::Kind Kind;
 
   // points to the SameRange of DeclEntry, only set when UsedAsFunctionPtr
@@ -48,6 +47,9 @@ struct DeclEntry {
   std::string Expansion;
   Range ExpansionReplaced{0, 0};
 
+  std::string TypeName1;
+  std::string TypeName2; // for function pointer Types decl only
+
   // If the Expansion is empty, the following Ranges points to the sources;
   // otherwise, the Ranges points to the Expansion.
   Range NameRange{0, 0};
@@ -59,13 +61,14 @@ struct DeclEntry {
 
   unsigned IsStatic       : 1 = false; // for functions and variables only
   unsigned NeedExpansion  : 1 = false; // Fails to expand the macro
-  unsigned IsDefinition   : 1;
+  unsigned IsDefinition   : 1 = false;
   unsigned IsInline       : 1 = false; // for function only
   unsigned IsAnonymous    : 1 = false; // for record only
   unsigned IsUnion        : 1 = false;
+  unsigned IsFunctionPtr  : 1 = false;
 
-  SmallSet<RefEntry, 4> InfRefs;  // the symbols used in the declaration
-  SmallSet<RefEntry, 4> ImplRefs; // the symbols used only in the definition
+  SmallDenseMap<std::string, RefEntry> InfRefs;  // the symbols used in the declaration
+  SmallDenseMap<std::string, RefEntry> ImplRefs; // the symbols used only in the definition
 
   bool operator==(const DeclEntry &) const = default;
 };
@@ -73,13 +76,14 @@ struct DeclEntry {
 
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const RecordDecl &RD,
-                                      const CompilerInstance &CI,
-                                      const MacroExpansionRecorder &MacroRecorder);
+                                      const CompilerInstance &CI);
 
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
-                                      const EnumDecl &ED,
-                                      const CompilerInstance &CI,
-                                      const MacroExpansionRecorder &MacroRecorder);
+                                      const TypedefDecl &TD,
+                                      const CompilerInstance &CI);
+
+
+
 
 
 // extern hash_code getTokenHash
@@ -116,7 +120,7 @@ public:
 
   template <std::derived_from<Decl> NodeType>
   void HandleNode(const MatchFinder::MatchResult &Result, const NodeType &Node) {
-    if (auto Entry = getDeclEntry(Result, Node, *CompilerInstancePtr, *MacroContext)) {
+    if (auto Entry = getDeclEntry(Result, Node, *CompilerInstancePtr)) {
       DeclEntries.push_back(std::move(*Entry));
       PostHandleNode(Result, Node, DeclEntries.back());
     }

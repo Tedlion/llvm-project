@@ -34,7 +34,7 @@ class MatcherTest : public ::testing::Test, SourceFileCallbacks {
         return;
       }
 
-      if (auto Entry = getDeclEntry(Result, *Node, *Test.CI, *Test.MacroRecorder.get())) {
+      if (auto Entry = getDeclEntry(Result, *Node, *Test.CI)) {
         Test.DeclEntries.push_back(*Entry);
       }
     }
@@ -44,6 +44,7 @@ class MatcherTest : public ::testing::Test, SourceFileCallbacks {
   std::vector<DeclEntry> DeclEntries;
   std::string ErrorMessage;
   MatcherCallback<RecordDecl, DeclScanner::RecordDeclID> RecordDeclHandler;
+  MatcherCallback<TypedefDecl, DeclScanner::TypedefDeclID> TypedefDeclHandler;
   const CompilerInstance * CI = nullptr;
   std::unique_ptr<MacroExpansionRecorder> MacroRecorder;
 
@@ -55,7 +56,7 @@ class MatcherTest : public ::testing::Test, SourceFileCallbacks {
   }
 
 protected:
-  MatcherTest() : RecordDeclHandler(*this) {
+  MatcherTest() : RecordDeclHandler(*this), TypedefDeclHandler(*this) {
   }
 
   template <typename T>
@@ -145,6 +146,13 @@ void MatcherTest::EnableMatcher<RecordDecl>() {
   Finder.addMatcher(
       DeclScanner::RecordDeclMatcher, &RecordDeclHandler);
 }
+
+template <>
+void MatcherTest::EnableMatcher<TypedefDecl>() {
+  Finder.addMatcher(DeclScanner::TypedefDeclMatcher, &TypedefDeclHandler);
+}
+
+
 
 static StringRef SimpleStruct = R"c(
 struct S {
@@ -548,8 +556,85 @@ TEST_F(MatcherTest, StructInMacro) {
 }
 
 
+StringRef SimpleTypedef = R"c(
+typedef int int_t;
+typedef short * short_pt;
+typedef char ** char_p2t;
+typedef volatile unsigned long long * const ull_pt;
+)c";
 
 
+TEST_F(MatcherTest, SimpleTypedef) {
+  EnableMatcher<TypedefDecl>();
+
+  ASSERT_TRUE(scanOnCode(SimpleTypedef));
+  ASSERT_EQ(getResult().size(), 4);
+
+  const auto &D1 = getResult()[0];
+
+  EXPECT_EQ(D1.Name, "int_t");
+  EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
+  EXPECT_EQ(D1.TypeName1, "int");
+  EXPECT_TRUE(verifyRangeMatched(SimpleTypedef, D1.FullRange,
+                                 "typedef int int_t;\n"));
+
+  const auto &D2 = getResult()[1];
+  EXPECT_EQ(D2.Name, "short_pt");
+  EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
+  EXPECT_EQ(D2.TypeName1, "short *");
+  EXPECT_TRUE(verifyRangeMatched(SimpleTypedef, D2.FullRange,
+                                 "typedef short * short_pt;\n"));
+
+  const auto &D3 = getResult()[2];
+  EXPECT_EQ(D3.Name, "char_p2t");
+  EXPECT_EQ(D3.Kind, Decl::Kind::Typedef);
+  EXPECT_EQ(D3.TypeName1, "char **");
+  EXPECT_TRUE(verifyRangeMatched(SimpleTypedef, D3.FullRange,
+                                 "typedef char ** char_p2t;\n"));
+
+  const auto &D4 = getResult()[3];
+  EXPECT_EQ(D4.Name, "ull_pt");
+  EXPECT_EQ(D4.TypeName1, "volatile unsigned long long *const");
+  EXPECT_TRUE(verifyRangeMatched(SimpleTypedef, D4.FullRange,
+    "typedef volatile unsigned long long * const ull_pt;\n"));
+}
+
+
+StringRef TypedefToStruct = R"c(
+struct S {
+  int a;
+};
+typedef struct S S_t;
+typedef struct S * S_p;
+)c";
+
+
+TEST_F(MatcherTest, TypedefToStruct) {
+  EnableMatcher<TypedefDecl>();
+
+  ASSERT_TRUE(scanOnCode(TypedefToStruct));
+  ASSERT_EQ(getResult().size(), 2);
+
+  const auto &D1 = getResult()[0];
+  EXPECT_EQ(D1.Name, "S_t");
+  EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
+  EXPECT_EQ(D1.TypeName1, "struct S");
+  EXPECT_TRUE(verifyRangeMatched(TypedefToStruct, D1.FullRange,
+                                 "typedef struct S S_t;\n"));
+  ASSERT_EQ(D1.ImplRefs.size(), 1);
+  auto it = D1.ImplRefs.find("S");
+  ASSERT_TRUE(it != D1.ImplRefs.end());
+  EXPECT_EQ(it->second.Kind, Decl::Kind::Record);
+
+  const auto &D2 = getResult()[1];
+  EXPECT_EQ(D2.Name, "S_p");
+  EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
+  EXPECT_EQ(D2.TypeName1, "struct S *");
+  EXPECT_TRUE(verifyRangeMatched(TypedefToStruct, D2.FullRange,
+                                 "typedef struct S * S_p;\n"));
+  // Note: struct S in not necessary for S_p, since it is used as a pointer
+  EXPECT_TRUE(D1.ImplRefs.empty());
+}
 
 
 
