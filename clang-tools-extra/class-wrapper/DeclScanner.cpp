@@ -230,8 +230,7 @@ static CharSourceRange getFullRange(SourceRange SR,
 
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const RecordDecl &RD,
-                                      const CompilerInstance &CI,
-                                      const MacroExpansionRecorder &MacroRecorder) {
+                                      const CompilerInstance &CI) {
   // Ignore RecordDecl in local scope
   const DeclContext * DC = RD.getDeclContext();
   if (DC->isFunctionOrMethod()) {
@@ -249,7 +248,7 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
 
   // TODO: nested case
   const SourceManager &SM = *Result.SourceManager;
-  DeclEntry D;
+  DeclEntry DE;
 
   RD.dump();
   SourceRange SR = RD.getSourceRange();
@@ -259,41 +258,41 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
   SR.print(llvm::errs(), SM);
   llvm::errs() << "\n";
 
-  D.Name = RD.getName().str();
-  D.IsAnonymous = D.Name.empty();
-  D.FilePath = SM.getFilename(RD.getBeginLoc()).str();
-  D.Kind = RD.getKind();
-  D.IsUnion = RD.isUnion();
-  D.IsDefinition = RD.isCompleteDefinition();
+  DE.Name = RD.getName().str();
+  DE.IsAnonymous = DE.Name.empty();
+  DE.FilePath = SM.getFilename(RD.getBeginLoc()).str();
+  DE.Kind = RD.getKind();
+  DE.IsUnion = RD.isUnion();
+  DE.IsDefinition = RD.isCompleteDefinition();
   CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
 
   if (SBegin.isMacroID() || SEnd.isMacroID()) {
     if (AssociatedRange.isInvalid())
       AssociatedRange = getFullRange(SR, SM, CI.getLangOpts());
-    D.ExpansionReplaced = getRangeFromAssociated(AssociatedRange, SM);
-    D.NeedExpansion = true;
-    return D;
+    DE.ExpansionReplaced = getRangeFromAssociated(AssociatedRange, SM);
+    DE.NeedExpansion = true;
+    return DE;
   }
 
-  if (D.IsDefinition)
-    D.ImplHash = getTokenHash(SBegin, SEnd, SM, CI);
-  D.FullRange = getRangeFromAssociated(AssociatedRange, SM);
+  if (DE.IsDefinition)
+    DE.ImplHash = getTokenHash(SBegin, SEnd, SM, CI);
+  DE.FullRange = getRangeFromAssociated(AssociatedRange, SM);
 
-  SmallSet<const RecordDecl *, 8> NestedDecls;
-  NestedDecls.insert(&RD);
-  for (const FieldDecl *Field : RD.fields()) {
-    llvm::errs() << "Field: " << Field->getName() << "\n";
-    // if (const auto *RT = Field->getType()->getAs<RecordType>()) {
-    //   if (const RecordDecl *NestedRD = RT->getDecl()) {
-    //     if (NestedRD->getDeclContext() == &RD) {
-    //       NestedDecls.insert(NestedRD);
-    //     }
-    //   }
-    // }
+  llvm::errs() << "decls:\n";
+  SmallSet<const RecordDecl *, 8> ClosureDecls;
+  ClosureDecls.insert(&RD);
+  for (const auto * TheDecl : RD.decls()) {
+    if (const RecordDecl * NestedRD = dyn_cast<RecordDecl>(TheDecl))
+      ClosureDecls.insert(NestedRD);
+    else if (const auto * Field = dyn_cast<FieldDecl>(TheDecl)) {
+      llvm::errs() << "Field: " << Field->getName() << "\n";
+      const Type * FieldType = Field->getType().getTypePtr();
+      // llvm::errs() << std::format("Field: {} Type: {}\n",
+      //     Field->getName(), FieldType->getAsString());
+    }
   }
 
-
-  return D;
+  return DE;
 
   // SmallSet<SourceLocation, 2> ExpansionLocs;
   // if (SBegin.isMacroID())
@@ -314,114 +313,55 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
 }
 
 
+static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type& T) {
+
+}
+
+
+
+std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
+                                      const TypedefDecl &TD,
+                                      const CompilerInstance &CI) {
+  const SourceManager &SM = *Result.SourceManager;
+  TD.dump();
+  // llvm::outs() << TD->getUnderlyingType().getAsString() << "\n";
+  llvm::errs() << std::format("UnderlyingType: {}\n", TD.getUnderlyingType().getAsString());
+
+  DeclEntry DE;
+  DE.Name = TD.getName();
+  DE.FilePath = SM.getFilename(TD.getBeginLoc()).str();
+  DE.Kind = TD.getKind();
+  QualType UnderlyingType = TD.getUnderlyingType();
+
+  if (!UnderlyingType->isFunctionPointerType()) {
+    DE.TypeName1 = UnderlyingType.getAsString();
+    if (auto Ref = getDependent(*UnderlyingType)) {
+      DE.InfRefs[Ref->first] = Ref->second;
+    }
+  }
+
+  else {
+    // const FunctionProtoType *ProtoType =
+    //     UnderlyingType->getAs<FunctionProtoType>();
+    // DE.TypeName1 = ProtoType->getReturnType().getAsString();
+    // DE.TypeName2 = ProtoType->getCanonicalSignature().getAsString();
+    // DE.IsFunctionPtr = true;
+  }
+
+  SourceRange SR = TD.getSourceRange();
+  CharSourceRange AssociatedRange = getAssociatedRange(TD, *Result.Context);
+  if (AssociatedRange.isInvalid())
+    AssociatedRange = getFullRange(SR, SM, CI.getLangOpts());
+  DE.FullRange = getRangeFromAssociated(AssociatedRange, SM);
+
+  return DE;
+}
+
+
 void DeclScanner::PostHandleNode(const MatchFinder::MatchResult &Result,
                                  const RecordDecl &RD, DeclEntry &Entry) {
 
 }
-
-#if 0
-
-template <typename MatcherHandler, typename NodeType, auto bindName>
-class ScannerMatcherHandler : public MatchFinder::MatchCallback {
-  DeclScanner &Scanner;
-public:
-  ScannerMatcherHandler(const NeedToWrapFunc &NeedToWrap,
-                        const RecordSymbolFunc &RecordSymbol,
-                        ExtendedODRHash::ODRHashCache &Cache)
-      : NeedToWrap(NeedToWrap), RecordSymbol(RecordSymbol),
-        TypeHashCache(Cache) {}
-
-  void run(const MatchFinder::MatchResult &Result) override {
-    const auto *Node = Result.Nodes.getNodeAs<NodeType>(bindName);
-    if (!Node) {
-      return;
-    }
-
-
-
-    StringRef FileName = Result.SourceManager->getFilename(Node->getBeginLoc());
-    if (!NeedToWrap(FileName)) {
-      return;
-    }
-
-    //    debugDump(Result, *Node);
-    auto *Handler = static_cast<MatcherHandler *>(this);
-    Handler->run(Result, *Node);
-  }
-
-  // For temp usage
-  void debugDump(const MatchFinder::MatchResult &Result, const NodeType &Node) {
-    Node.dumpColor();
-    if constexpr (PrettyDumpNode<NodeType>) {
-      Node.dumpPretty(*Result.Context);
-    }
-  }
-
-  const NeedToWrapFunc &NeedToWrap;
-  const RecordSymbolFunc &RecordSymbol;
-};
-
-class TypedefDeclHandler
-    : public ScannerMatcherHandler<TypedefDeclHandler, TypedefDecl,
-                                   TypedefDeclStr> {
-public:
-  using ScannerMatcherHandler::ScannerMatcherHandler;
-
-  void run(const MatchFinder::MatchResult &Result, const TypedefDecl &TD) {
-    debugDump(Result, TD);
-
-    CharSourceRange FullRange = getAssociatedRange(TD, *Result.Context);
-    llvm::errs() << getText(FullRange, *Result.Context) << "\n";
-  }
-};
-
-class RecordDeclHandler
-    : public ScannerMatcherHandler<RecordDeclHandler, RecordDecl,
-                                   RecordDeclStr> {
-public:
-  using ScannerMatcherHandler::ScannerMatcherHandler;
-
-  void run(const MatchFinder::MatchResult &Result, const RecordDecl &RD) {
-    if (RD.getName().empty()) {
-      return;
-    }
-
-    debugDump(Result, RD);
-
-    CharSourceRange FullRange = getAssociatedRange(RD, *Result.Context);
-
-    if (!RD.isCompleteDefinition()) {
-      return;
-    }
-
-    auto ParentNode = Result.Context->getParents(RD);
-    if (ParentNode.size() != 1 ||
-        !ParentNode[0].getNodeKind().isSame(
-            ASTNodeKind::getFromNodeKind<clang::TranslationUnitDecl>())) {
-      return;
-      }
-
-    auto HashValue =
-        ExtendedODRHash::calculateRecordDeclHash(&RD, TypeHashCache);
-
-    Replacement Replace(*Result.SourceManager, FullRange, StringRef());
-
-    RecordSymbol(SymbolRecordEntry{
-        RD.getName().str(), Replace.getFilePath().str(),
-        tooling::Range(Replace.getOffset(), Replace.getLength()), RD.getKind(),
-        StorageClass::SC_Extern, ExtendedODRHash::HashValueInvalid, HashValue,
-        false, false});
-    //    unsigned Hash = getRecordDeclHash(RD);
-//    llvm::errs() << std::format(
-//        "{} 0x{:x}\n", getText(FullRange, *Result.Context), Hash);
-
-//    RecordSymbol(RD.getName(), FullRange, RD.getKind(),
-//                         StorageClass::SC_Extern, Hash, std::nullopt, false,
-//                         false);
-  }
-};
-
-#endif
 
 
 DeclScanner::DeclScanner(StringRef Target, ArrayRef<std::string> Filenames,
