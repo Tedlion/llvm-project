@@ -17,11 +17,30 @@
 #include "llvm/ADT/ArrayRef.h"
 
 namespace clang::class_wrapper {
-
 using namespace clang::ast_matchers;
 using namespace clang::tooling;
 using namespace llvm;
 using internal::Matcher;
+
+
+struct StringDenseMapInfo {
+  static std::string getEmptyKey() {
+    // making it strange enough
+    return "e%M^p&T*y(K)e_Y";
+  }
+
+  static std::string getTombstoneKey() {
+    return "t!O@m#BsToNe";
+  }
+
+  static unsigned getHashValue(const std::string &Val) {
+    return llvm::hash_value(Val);
+  }
+
+  static bool isEqual(const std::string & LHS, const std::string & RHS) {
+    return LHS == RHS;
+  }
+};
 
 struct RefEntry {
   Decl::Kind Kind;
@@ -67,8 +86,10 @@ struct DeclEntry {
   unsigned IsUnion        : 1 = false;
   unsigned IsFunctionPtr  : 1 = false;
 
-  SmallDenseMap<std::string, RefEntry> InfRefs;  // the symbols used in the declaration
-  SmallDenseMap<std::string, RefEntry> ImplRefs; // the symbols used only in the definition
+  // the symbols used in the declaration
+  SmallDenseMap<std::string, RefEntry, 4, StringDenseMapInfo> InfRefs;
+  // the symbols used only in the definition
+  SmallDenseMap<std::string, RefEntry, 4, StringDenseMapInfo> ImplRefs;
 
   bool operator==(const DeclEntry &) const = default;
 };

@@ -313,10 +313,32 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
 }
 
 
-static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type& T) {
+static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type* T);
 
+static std::optional<std::pair<std::string, RefEntry> > getDependent(
+    const QualType &QT) {
+  return getDependent(QT.getTypePtr());
 }
 
+
+static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type* T) {
+  if (!T)
+    return std::nullopt;
+  // FIXME: not working on the canonical type
+
+  llvm::errs() << std::format("isBuiltinType:{}, isa<BuiltinType>:{}\n",
+                              T->isBuiltinType(), isa<BuiltinType>(T));
+  llvm::errs() << std::format("isPointerType:{}, isa<PointerType>:{}\n",
+                              T->isPointerType(), isa<PointerType>(T));
+
+  if (T->isBuiltinType())
+    return std::nullopt;
+  //
+  // if (T->isPointerType())
+  //   return getDependent(T->getPointeeType());
+
+  return std::nullopt;
+}
 
 
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
@@ -335,7 +357,7 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
 
   if (!UnderlyingType->isFunctionPointerType()) {
     DE.TypeName1 = UnderlyingType.getAsString();
-    if (auto Ref = getDependent(*UnderlyingType)) {
+    if (auto Ref = getDependent(UnderlyingType)) {
       DE.InfRefs[Ref->first] = Ref->second;
     }
   }
