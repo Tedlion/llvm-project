@@ -600,6 +600,51 @@ TEST_F(MatcherTest, SimpleTypedef) {
 }
 
 
+StringRef TypedefOnCustomType = R"c(
+typedef int foo_t;
+typedef foo_t bar_t;
+typedef bar_t * bar_p;
+typedef bar_p foo_p;
+)c";
+
+
+TEST_F(MatcherTest, TypedefOnCustomType) {
+  EnableMatcher<TypedefDecl>();
+
+  ASSERT_TRUE(scanOnCode(TypedefOnCustomType));
+  ASSERT_EQ(getResult().size(), 4);
+
+  const auto &D1 = getResult()[0];
+  EXPECT_EQ(D1.Name, "foo_t");
+  EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
+  EXPECT_EQ(D1.TypeName1, "int");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnCustomType, D1.FullRange,
+                                 "typedef int foo_t;\n"));
+
+  const auto &D2 = getResult()[1];
+  EXPECT_EQ(D2.Name, "bar_t");
+  EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
+  EXPECT_EQ(D2.TypeName1, "foo_t");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnCustomType, D2.FullRange,
+                                 "typedef foo_t bar_t;\n"));
+
+  const auto &D3 = getResult()[2];
+  EXPECT_EQ(D3.Name, "bar_p");
+  EXPECT_EQ(D3.Kind, Decl::Kind::Typedef);
+  EXPECT_EQ(D3.TypeName1, "bar_t *");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnCustomType, D3.FullRange,
+                                 "typedef bar_t * bar_p;\n"));
+
+  const auto &D4 = getResult()[3];
+  EXPECT_EQ(D4.Name, "foo_p");
+  EXPECT_EQ(D4.Kind, Decl::Kind::Typedef);
+  EXPECT_EQ(D4.TypeName1, "bar_p");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnCustomType, D4.FullRange,
+                                 "typedef bar_p foo_p;\n"));
+}
+
+
+
 StringRef TypedefToStruct = R"c(
 struct S {
   int a;
