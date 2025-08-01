@@ -287,29 +287,10 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
     else if (const auto * Field = dyn_cast<FieldDecl>(TheDecl)) {
       llvm::errs() << "Field: " << Field->getName() << "\n";
       const Type * FieldType = Field->getType().getTypePtr();
-      // llvm::errs() << std::format("Field: {} Type: {}\n",
-      //     Field->getName(), FieldType->getAsString());
     }
   }
 
   return DE;
-
-  // SmallSet<SourceLocation, 2> ExpansionLocs;
-  // if (SBegin.isMacroID())
-  //   ExpansionLocs.insert(SM.getExpansionLoc(SBegin));
-  // if (SEnd.isMacroID())
-  //   ExpansionLocs.insert(SM.getExpansionLoc(SEnd));
-  //
-  // SourceLocation NameLoc;
-  // if (const auto *Id = RD.getIdentifier()) {
-  //   NameLoc = RD.getLocation();
-  //   unsigned NameBegin = SM.getFileOffset(NameLoc);
-  //   D.NameRange = Range(NameBegin, Id->getLength());
-  //   if (NameLoc.isMacroID())
-  //     ExpansionLocs.insert(SM.getExpansionLoc(NameLoc));
-  // } else {
-  //
-  // }
 }
 
 
@@ -326,18 +307,85 @@ static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type* 
     return std::nullopt;
   // FIXME: not working on the canonical type
 
-  llvm::errs() << std::format("isBuiltinType:{}, isa<BuiltinType>:{}\n",
-                              T->isBuiltinType(), isa<BuiltinType>(T));
-  llvm::errs() << std::format("isPointerType:{}, isa<PointerType>:{}\n",
-                              T->isPointerType(), isa<PointerType>(T));
-
-  if (T->isBuiltinType())
+  if (isa<BuiltinType>(T))
     return std::nullopt;
-  //
-  // if (T->isPointerType())
-  //   return getDependent(T->getPointeeType());
+
+  if (const auto * PT= dyn_cast<PointerType>(T)) {
+    const QualType Pointee = PT->getPointeeType();
+    const Type * PointeeType = Pointee.getTypePtr();
+
+    if (!PointeeType)
+      return std::nullopt;
+
+    // For type usage like `typedef struct S * S_t;` or `struct S * p;`,
+    // the declaration of `struct S` is not necessary,
+    // thus we should return nullopt when the Pointee is a direct RecordType.
+    if (const auto *Elaborated = dyn_cast<ElaboratedType>(PointeeType)) {
+      auto Keyword = Elaborated->getKeyword();
+      if (Keyword == ElaboratedTypeKeyword::Struct ||
+          Keyword == ElaboratedTypeKeyword::Union ||
+          Keyword == ElaboratedTypeKeyword::Class)
+        return std::nullopt;
+    }
+
+    return getDependent(PointeeType);
+  }
+
+  if (const auto * AT = dyn_cast<ArrayType>(T)) {
+    const QualType ElementType = AT->getElementType();
+    const Type * ElementTypePtr = ElementType.getTypePtr();
+
+    if (!ElementTypePtr)
+      return std::nullopt;
+
+    if (const auto *Elaborated = dyn_cast<ElaboratedType>(ElementTypePtr)) {
+      auto Keyword = Elaborated->getKeyword();
+      if (Keyword == ElaboratedTypeKeyword::Struct ||
+          Keyword == ElaboratedTypeKeyword::Union ||
+          Keyword == ElaboratedTypeKeyword::Class)
+        return std::nullopt;
+    }
+
+    return getDependent(ElementTypePtr);
+  }
+
+  if (const auto * Elaborated = dyn_cast<ElaboratedType>(T)) {
+    llvm::errs() << "ElaboratedType: " << Elaborated->getNamedType().getAsString() << "\n";
+    return std::make_pair(
+        Elaborated->getNamedType().getAsString(),
+        RefEntry{Decl::Kind::Typedef, Range(0, 0)});
+  }
 
   return std::nullopt;
+}
+
+
+static void findClassNameInsertions(
+    StringRef TypeName, SmallVectorImpl<EditLocation> &EditLocations) {
+  // We need to turn all function pointer to member function pointer,
+  // by inserting the class name specifier before the '*' which represent
+  // the function pointer type.
+  // There may be multiple insertion locations, for the types of a function's
+  // return and parameters can also be function pointers.
+  //  e.g. The type name may be `int (*(*(*[10])(int))(foo_t (**)(int)))()`
+  size_t From = 0;
+  while (true) {
+    From = TypeName.find("(*", From);
+    if (From == StringRef::npos)
+      break;
+
+    EditLocations.emplace_back(EditKind::InsertClassName, From + 1);
+  }
+}
+
+
+static EditLocation findArrayNameInsertion(StringRef TypeName) {
+  return {EditKind::InsertTypedefName, TypeName.find('[', 0)};
+}
+
+
+static EditLocation findFunctionPtrNameInsertion(StringRef TypeName) {
+
 }
 
 
@@ -346,28 +394,34 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const CompilerInstance &CI) {
   const SourceManager &SM = *Result.SourceManager;
   TD.dump();
-  // llvm::outs() << TD->getUnderlyingType().getAsString() << "\n";
-  llvm::errs() << std::format("UnderlyingType: {}\n", TD.getUnderlyingType().getAsString());
+  // llvm::errs() << std::format("UnderlyingType: {}\n", TD.getUnderlyingType().getAsString());
 
   DeclEntry DE;
   DE.Name = TD.getName();
   DE.FilePath = SM.getFilename(TD.getBeginLoc()).str();
   DE.Kind = TD.getKind();
+
   QualType UnderlyingType = TD.getUnderlyingType();
 
-  if (!UnderlyingType->isFunctionPointerType()) {
-    DE.TypeName1 = UnderlyingType.getAsString();
-    if (auto Ref = getDependent(UnderlyingType)) {
-      DE.InfRefs[Ref->first] = Ref->second;
-    }
+  DE.Expansion = UnderlyingType.getAsString();
+  findClassNameInsertions(DE.Expansion, DE.EditLocations);
+
+  // FunctionPtr or FunctionPtr Array
+  bool WithFunctionPtr = !DE.EditLocations.empty();
+
+  if (isa<ArrayType>(UnderlyingType.getTypePtr())) {
+    DE.IsArray = true;
+    DE.EditLocations.emplace_back(findArrayNameInsertion(DE.Expansion));
+  } else if (WithFunctionPtr) {
+    DE.IsFunctionPtr = true;
+    DE.EditLocations.emplace_back(findFunctionPtrNameInsertion(DE.Expansion));
   }
 
-  else {
-    // const FunctionProtoType *ProtoType =
-    //     UnderlyingType->getAs<FunctionProtoType>();
-    // DE.TypeName1 = ProtoType->getReturnType().getAsString();
-    // DE.TypeName2 = ProtoType->getCanonicalSignature().getAsString();
-    // DE.IsFunctionPtr = true;
+  if (!UnderlyingType->isFunctionPointerType()) {
+    if (auto Ref = getDependent(UnderlyingType))
+      DE.ImplRefs.insert(*Ref);
+  } else {
+
   }
 
   SourceRange SR = TD.getSourceRange();

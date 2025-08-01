@@ -514,7 +514,6 @@ TEST_F(MatcherTest, StructPartialFromMacro) {
 }
 
 
-
 StringRef StructInMacro = R"c(
 #define MACRO1 int x;
 #define MACRO2(a, b) struct S { int a; int b; };
@@ -556,6 +555,16 @@ TEST_F(MatcherTest, StructInMacro) {
 }
 
 
+static void CheckTypeRef(const DeclEntry::MapType Map, ArrayRef<StringRef> Expected) {
+  ASSERT_EQ(Map.size(), Expected.size());
+  for (StringRef Type: Expected) {
+    auto It = Map.find_as(Type);
+    ASSERT_TRUE(It != Map.end());
+    EXPECT_EQ(It->second.Kind, Decl::Kind::Typedef);
+  }
+}
+
+
 StringRef SimpleTypedef = R"c(
 typedef int int_t;
 typedef short * short_pt;
@@ -574,29 +583,33 @@ TEST_F(MatcherTest, SimpleTypedef) {
 
   EXPECT_EQ(D1.Name, "int_t");
   EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D1.TypeName1, "int");
+  EXPECT_EQ(D1.Expansion, "int");
   EXPECT_TRUE(verifyRangeMatched(SimpleTypedef, D1.FullRange,
                                  "typedef int int_t;\n"));
+  CheckTypeRef(D1.ImplRefs, {});
 
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "short_pt");
   EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D2.TypeName1, "short *");
+  EXPECT_EQ(D2.Expansion, "short *");
   EXPECT_TRUE(verifyRangeMatched(SimpleTypedef, D2.FullRange,
                                  "typedef short * short_pt;\n"));
+  CheckTypeRef(D2.ImplRefs, {});
 
   const auto &D3 = getResult()[2];
   EXPECT_EQ(D3.Name, "char_p2t");
   EXPECT_EQ(D3.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D3.TypeName1, "char **");
+  EXPECT_EQ(D3.Expansion, "char **");
   EXPECT_TRUE(verifyRangeMatched(SimpleTypedef, D3.FullRange,
                                  "typedef char ** char_p2t;\n"));
+  CheckTypeRef(D3.ImplRefs, {});
 
   const auto &D4 = getResult()[3];
   EXPECT_EQ(D4.Name, "ull_pt");
-  EXPECT_EQ(D4.TypeName1, "volatile unsigned long long *const");
+  EXPECT_EQ(D4.Expansion, "volatile unsigned long long *const");
   EXPECT_TRUE(verifyRangeMatched(SimpleTypedef, D4.FullRange,
     "typedef volatile unsigned long long * const ull_pt;\n"));
+  CheckTypeRef(D4.ImplRefs, {});
 }
 
 
@@ -617,32 +630,148 @@ TEST_F(MatcherTest, TypedefOnCustomType) {
   const auto &D1 = getResult()[0];
   EXPECT_EQ(D1.Name, "foo_t");
   EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D1.TypeName1, "int");
+  EXPECT_EQ(D1.Expansion, "int");
   EXPECT_TRUE(verifyRangeMatched(TypedefOnCustomType, D1.FullRange,
                                  "typedef int foo_t;\n"));
+  CheckTypeRef(D1.ImplRefs, {});
 
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "bar_t");
   EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D2.TypeName1, "foo_t");
+  EXPECT_EQ(D2.Expansion, "foo_t");
   EXPECT_TRUE(verifyRangeMatched(TypedefOnCustomType, D2.FullRange,
                                  "typedef foo_t bar_t;\n"));
+  CheckTypeRef(D2.ImplRefs, {"foo_t"});
 
   const auto &D3 = getResult()[2];
   EXPECT_EQ(D3.Name, "bar_p");
   EXPECT_EQ(D3.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D3.TypeName1, "bar_t *");
+  EXPECT_EQ(D3.Expansion, "bar_t *");
   EXPECT_TRUE(verifyRangeMatched(TypedefOnCustomType, D3.FullRange,
                                  "typedef bar_t * bar_p;\n"));
+  CheckTypeRef(D3.ImplRefs, {"bar_t"});
 
   const auto &D4 = getResult()[3];
   EXPECT_EQ(D4.Name, "foo_p");
   EXPECT_EQ(D4.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D4.TypeName1, "bar_p");
+  EXPECT_EQ(D4.Expansion, "bar_p");
   EXPECT_TRUE(verifyRangeMatched(TypedefOnCustomType, D4.FullRange,
                                  "typedef bar_p foo_p;\n"));
+  CheckTypeRef(D4.ImplRefs, {"bar_p"});
 }
 
+
+StringRef TypedefOnVoidPtr = R"c(
+typedef void void_t;
+typedef void * void_p;
+typedef void_t void_t2;
+typedef void_t2 * void_p2;
+typedef void_p2 void_p3;
+)c";
+
+
+TEST_F(MatcherTest, TypedefOnVoidPtr) {
+  EnableMatcher<TypedefDecl>();
+
+  ASSERT_TRUE(scanOnCode(TypedefOnVoidPtr));
+  ASSERT_EQ(getResult().size(), 5);
+
+  const auto &D1 = getResult()[0];
+  EXPECT_EQ(D1.Name, "void_t");
+  EXPECT_EQ(D1.Expansion, "void");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnVoidPtr, D1.FullRange,
+    "typedef void void_t;\n"));
+  CheckTypeRef(D1.ImplRefs, {});
+
+  const auto &D2 = getResult()[1];
+  EXPECT_EQ(D2.Name, "void_p");
+  EXPECT_EQ(D2.Expansion, "void *");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnVoidPtr, D2.FullRange,
+    "typedef void * void_p;\n"));
+  CheckTypeRef(D2.ImplRefs, {});
+
+  const auto &D3 = getResult()[2];
+  EXPECT_EQ(D3.Name, "void_t2");
+  EXPECT_EQ(D3.Expansion, "void_t");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnVoidPtr, D3.FullRange,
+    "typedef void_t void_t2;\n"));
+  CheckTypeRef(D3.ImplRefs, {"void_t"});
+
+  const auto &D4 = getResult()[3];
+  EXPECT_EQ(D4.Name, "void_p2");
+  EXPECT_EQ(D4.Expansion, "void_t2 *");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnVoidPtr, D4.FullRange,
+    "typedef void_t2 * void_p2;\n"));
+  CheckTypeRef(D4.ImplRefs, {"void_t2"});
+
+  const auto &D5 = getResult()[4];
+  EXPECT_EQ(D5.Name, "void_p3");
+  EXPECT_EQ(D5.Expansion, "void_p2");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnVoidPtr, D5.FullRange,
+    "typedef void_p2 void_p3;\n"));
+  CheckTypeRef(D5.ImplRefs, {"void_p2"});
+}
+
+
+StringRef TypedefOnArray = R"c(
+typedef int foo_t;
+typedef foo_t a_t[];
+typedef foo_t a1_t[10];
+typedef foo_t a2_t[][20];
+typedef foo_t a3_t[10][20];
+typedef foo_t * a1_p_t[][10];
+typedef a_t bar_t;
+)c";
+
+
+TEST_F(MatcherTest, TypedefOnArray) {
+  EnableMatcher<TypedefDecl>();
+
+  ASSERT_TRUE(scanOnCode(TypedefOnArray));
+  ASSERT_EQ(getResult().size(), 7);
+
+  const auto &D2 = getResult()[1];
+  EXPECT_EQ(D2.Name, "a_t");
+  EXPECT_EQ(D2.Expansion, "foo_t[]");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnArray, D2.FullRange,
+    "typedef foo_t a_t[];\n"));
+  CheckTypeRef(D2.ImplRefs, {"foo_t"});
+
+  const auto &D3 = getResult()[2];
+  EXPECT_EQ(D3.Name, "a1_t");
+  EXPECT_EQ(D3.Expansion, "foo_t[10]");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnArray, D3.FullRange,
+    "typedef foo_t a1_t[10];\n"));
+  CheckTypeRef(D3.ImplRefs, {"foo_t"});
+
+  const auto &D4 = getResult()[3];
+  EXPECT_EQ(D4.Name, "a2_t");
+  EXPECT_EQ(D4.Expansion, "foo_t[][20]");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnArray, D4.FullRange,
+    "typedef foo_t a2_t[][20];\n"));
+  CheckTypeRef(D4.ImplRefs, {"foo_t"});
+
+  const auto &D5 = getResult()[4];
+  EXPECT_EQ(D5.Name, "a3_t");
+  EXPECT_EQ(D5.Expansion, "foo_t[10][20]");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnArray, D5.FullRange,
+    "typedef foo_t a3_t[10][20];\n"));
+  CheckTypeRef(D5.ImplRefs, {"foo_t"});
+
+  const auto &D6 = getResult()[5];
+  EXPECT_EQ(D6.Name, "a1_p_t");
+  EXPECT_EQ(D6.Expansion, "foo_t *[][10]");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnArray, D6.FullRange,
+    "typedef foo_t * a1_p_t[][10];\n"));
+  CheckTypeRef(D6.ImplRefs, {"foo_t"});
+
+  const auto &D7 = getResult()[6];
+  EXPECT_EQ(D7.Name, "bar_t");
+  EXPECT_EQ(D7.Expansion, "a_t");
+  EXPECT_TRUE(verifyRangeMatched(TypedefOnArray, D7.FullRange,
+    "typedef a_t bar_t;\n"));
+  CheckTypeRef(D7.ImplRefs, {"a_t"});
+}
 
 
 StringRef TypedefToStruct = R"c(
@@ -663,7 +792,7 @@ TEST_F(MatcherTest, TypedefToStruct) {
   const auto &D1 = getResult()[0];
   EXPECT_EQ(D1.Name, "S_t");
   EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D1.TypeName1, "struct S");
+  EXPECT_EQ(D1.Expansion, "struct S");
   EXPECT_TRUE(verifyRangeMatched(TypedefToStruct, D1.FullRange,
                                  "typedef struct S S_t;\n"));
   ASSERT_EQ(D1.ImplRefs.size(), 1);
@@ -674,13 +803,12 @@ TEST_F(MatcherTest, TypedefToStruct) {
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "S_p");
   EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D2.TypeName1, "struct S *");
+  EXPECT_EQ(D2.Expansion, "struct S *");
   EXPECT_TRUE(verifyRangeMatched(TypedefToStruct, D2.FullRange,
                                  "typedef struct S * S_p;\n"));
   // Note: struct S in not necessary for S_p, since it is used as a pointer
   EXPECT_TRUE(D1.ImplRefs.empty());
 }
-
 
 
 StringRef StructSWithSelfPtr = R"c(
