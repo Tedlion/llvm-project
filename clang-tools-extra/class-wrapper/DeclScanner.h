@@ -37,7 +37,20 @@ struct StringDenseMapInfo {
     return llvm::hash_value(Val);
   }
 
+  static unsigned getHashValue(StringRef Val) {
+    return llvm::hash_value(Val);
+  }
+
+
   static bool isEqual(const std::string & LHS, const std::string & RHS) {
+    return LHS == RHS;
+  }
+
+  static bool isEqual(StringRef LHS, const std::string & RHS) {
+    return LHS == RHS;
+  }
+
+  static bool isEqual(const std::string & LHS, StringRef RHS) {
     return LHS == RHS;
   }
 };
@@ -53,6 +66,43 @@ struct RefEntry {
   unsigned Nested                : 1 = false; // Dependent type is nested in struct
 };
 
+enum class EditKind {
+  Invalid,
+  InsertClassName,
+  InsertTypedefName,
+  InsertVarDeclName,
+};
+
+class EditLocation {
+  unsigned Edit           : 4; // EditKind
+  unsigned Offset         : 28;
+
+public:
+  EditLocation(EditKind Kind, unsigned Offset)
+      : Edit(static_cast<unsigned>(Kind)), Offset(Offset) {}
+
+  EditLocation()
+    : EditLocation(EditKind::Invalid, 0) {
+  }
+
+  EditKind getEditKind() const {
+    return static_cast<EditKind>(Edit);
+  }
+
+  unsigned getOffset() const {
+    return Offset;
+  }
+
+  bool isValid() const {
+    return Edit != static_cast<unsigned>(EditKind::Invalid);
+  }
+
+  auto operator<=>(const EditLocation &other) const {
+    if (Offset == other.Offset)
+      return Edit <=> other.Edit;
+    return Offset <=> other.Offset;
+  }
+};
 
 struct DeclEntry {
   std::string Name;
@@ -66,8 +116,8 @@ struct DeclEntry {
   std::string Expansion;
   Range ExpansionReplaced{0, 0};
 
-  std::string TypeName1;
-  std::string TypeName2; // for function pointer Types decl only
+  // sorted by Offset
+  SmallVector<EditLocation, 4> EditLocations;
 
   // If the Expansion is empty, the following Ranges points to the sources;
   // otherwise, the Ranges points to the Expansion.
@@ -84,12 +134,12 @@ struct DeclEntry {
   unsigned IsInline       : 1 = false; // for function only
   unsigned IsAnonymous    : 1 = false; // for record only
   unsigned IsUnion        : 1 = false;
+  unsigned IsArray        : 1 = false;
   unsigned IsFunctionPtr  : 1 = false;
 
-  // the symbols used in the declaration
-  SmallDenseMap<std::string, RefEntry, 4, StringDenseMapInfo> InfRefs;
-  // the symbols used only in the definition
-  SmallDenseMap<std::string, RefEntry, 4, StringDenseMapInfo> ImplRefs;
+  using MapType = SmallDenseMap<std::string, RefEntry, 4, StringDenseMapInfo>;
+  MapType InfRefs;  // the symbols used in the declaration
+  MapType ImplRefs; // the symbols used only in the definition
 
   bool operator==(const DeclEntry &) const = default;
 };
