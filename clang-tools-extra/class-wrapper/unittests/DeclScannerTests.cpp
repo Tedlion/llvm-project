@@ -17,6 +17,7 @@
 #include "DeclScanner.h"
 #include "gtest/gtest.h"
 #include <expected>
+#include <source_location>
 
 using namespace clang;
 using namespace clang::ast_matchers;
@@ -555,12 +556,17 @@ TEST_F(MatcherTest, StructInMacro) {
 }
 
 
-static void CheckTypeRef(const DeclEntry::MapType Map, ArrayRef<StringRef> Expected) {
-  ASSERT_EQ(Map.size(), Expected.size());
+static void CheckTypeRef(
+    const DeclEntry::MapType Map, ArrayRef<StringRef> Expected,
+    const std::source_location &location = std::source_location::current()) {
+  std::string locationStr = std::format(
+      " at {}:{}", location.file_name(), location.line());
+  ASSERT_EQ(Map.size(), Expected.size()) << locationStr;
   for (StringRef Type: Expected) {
     auto It = Map.find_as(Type);
-    ASSERT_TRUE(It != Map.end());
-    EXPECT_EQ(It->second.Kind, Decl::Kind::Typedef);
+    ASSERT_TRUE(It != Map.end()) << std::format(
+        "'{}' not found{}", Type.str(), locationStr);
+    EXPECT_EQ(It->second.Kind, Decl::Kind::Typedef) << locationStr;
   }
 }
 
@@ -796,9 +802,7 @@ TEST_F(MatcherTest, TypedefToStruct) {
   EXPECT_TRUE(verifyRangeMatched(TypedefToStruct, D1.FullRange,
                                  "typedef struct S S_t;\n"));
   ASSERT_EQ(D1.ImplRefs.size(), 1);
-  auto it = D1.ImplRefs.find("S");
-  ASSERT_TRUE(it != D1.ImplRefs.end());
-  EXPECT_EQ(it->second.Kind, Decl::Kind::Record);
+  CheckTypeRef(D1.ImplRefs, {"S"});
 
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "S_p");
@@ -807,7 +811,7 @@ TEST_F(MatcherTest, TypedefToStruct) {
   EXPECT_TRUE(verifyRangeMatched(TypedefToStruct, D2.FullRange,
                                  "typedef struct S * S_p;\n"));
   // Note: struct S in not necessary for S_p, since it is used as a pointer
-  EXPECT_TRUE(D1.ImplRefs.empty());
+  CheckTypeRef(D2.ImplRefs, {});
 }
 
 
