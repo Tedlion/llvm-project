@@ -55,16 +55,6 @@ struct StringDenseMapInfo {
   }
 };
 
-struct RefEntry {
-  Decl::Kind Kind;
-
-  // points to the SameRange of DeclEntry, only set when UsedAsFunctionPtr
-  Range Range;
-
-  unsigned IsStatic              : 1 = false;
-  unsigned UsedAsFunctionPtr     : 1 = false;
-  unsigned Nested                : 1 = false; // Dependent type is nested in struct
-};
 
 enum class EditKind {
   Invalid,
@@ -103,6 +93,19 @@ public:
     return Offset <=> other.Offset;
   }
 };
+
+struct RefEntry {
+  Decl::Kind Kind;
+
+  // points to the SameRange of DeclEntry, only set when UsedAsFunctionPtr
+  Range Range;
+
+  unsigned FailedToLocate        : 1 = false; // Failed to locate the symbol in the source code
+  unsigned IsStatic              : 1 = false;
+  unsigned UsedAsFunctionPtr     : 1 = false;
+  unsigned Nested                : 1 = false; // Dependent type is nested in struct
+};
+
 
 struct DeclEntry {
   std::string Name;
@@ -152,9 +155,6 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const TypedefDecl &TD,
                                       const CompilerInstance &CI);
-
-
-
 
 
 // extern hash_code getTokenHash

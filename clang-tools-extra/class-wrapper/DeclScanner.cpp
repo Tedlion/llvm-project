@@ -7,6 +7,7 @@
 #include "DeclScanner.h"
 #include "Support.h"
 
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/Tooling/Tooling.h"
 #include "clang/Tooling/Transformer/SourceCode.h"
@@ -80,6 +81,7 @@ static hash_code getTokenHash(SourceLocation Begin, SourceLocation End,
 }
 
 
+#if 0
 static bool checkExpansion(SourceRange AssociatedRange,
                            SourceLocation NameLoc, const SourceManager &SM,
                            const CompilerInstance &CI,
@@ -161,6 +163,7 @@ expandOnLocations(const SmallSet<SourceLocation, 3> &ExpansionLocs,
   hash_code Hash(0);
   SmallVector<unsigned, 4> Offsets;
 }
+#endif
 
 
 static CharSourceRange getFullRange(SourceRange SR,
@@ -225,6 +228,66 @@ static CharSourceRange getFullRange(SourceRange SR,
       "\n";
   return Range;
 }
+
+
+
+namespace {
+class DeclDependencyVisitor
+    : public RecursiveASTVisitor<DeclDependencyVisitor> {
+public:
+  using ResultCallback =
+    std::function<void(const std::string &, const RefEntry &)>;
+
+  static void scanOn(QualType Type, const ResultCallback & callback) {
+    DeclDependencyVisitor Visitor(callback);
+    Visitor.TraverseType(Type);
+  }
+
+  bool TraversePointerType(PointerType *PT) {
+    const QualType Pointee = PT->getPointeeType();
+    const Type *PointeeType = Pointee.getTypePtr();
+
+    if (!PointeeType)
+      return true;
+
+    // For type usage like `typedef struct S * S_t;` or `struct S * p;`,
+    // the declaration of `struct S` is not necessary,
+    // thus we should early return here.
+    if (const auto *Elaborated = dyn_cast<ElaboratedType>(PointeeType)) {
+      auto Keyword = Elaborated->getKeyword();
+      if (Keyword == ElaboratedTypeKeyword::Struct ||
+          Keyword == ElaboratedTypeKeyword::Union ||
+          Keyword == ElaboratedTypeKeyword::Class)
+        return true;
+    }
+
+    return RecursiveASTVisitor::TraversePointerType(PT);
+  }
+
+
+  bool VisitElaboratedType(ElaboratedType * ET) {
+    // Fixme: we ignore the difference between C and C++ here,
+    //  for code `struct S{};`
+    //  symbol `S` is unknown in C, only `struct S` is valid.
+    //  But in C++, `S` is valid.
+    //  Ignore the difference for now, since no occurrences in target codebase.
+
+    std::string Name = ET->getNamedType().getAsString();
+    if (ET->getKeyword() != ElaboratedTypeKeyword::None)
+      Name = Name.substr(Name.find(' ') + 1);
+    //llvm::errs() << "ElaboratedType: " << Name << "\n";
+    Callback(Name, RefEntry{Decl::Kind::Typedef, Range(0, 0)});
+    return true;
+  }
+
+private:
+  ResultCallback Callback;
+
+  explicit DeclDependencyVisitor(const ResultCallback &CB) : Callback(CB) {}
+
+};
+
+};
 
 
 
@@ -294,6 +357,7 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
 }
 
 
+#if 0
 static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type* T);
 
 static std::optional<std::pair<std::string, RefEntry> > getDependent(
@@ -338,14 +402,6 @@ static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type* 
     if (!ElementTypePtr)
       return std::nullopt;
 
-    if (const auto *Elaborated = dyn_cast<ElaboratedType>(ElementTypePtr)) {
-      auto Keyword = Elaborated->getKeyword();
-      if (Keyword == ElaboratedTypeKeyword::Struct ||
-          Keyword == ElaboratedTypeKeyword::Union ||
-          Keyword == ElaboratedTypeKeyword::Class)
-        return std::nullopt;
-    }
-
     return getDependent(ElementTypePtr);
   }
 
@@ -358,9 +414,9 @@ static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type* 
 
   return std::nullopt;
 }
+#endif
 
-
-static void findClassNameInsertions(
+static void findClassnameInsertions(
     StringRef TypeName, SmallVectorImpl<EditLocation> &EditLocations) {
   // We need to turn all function pointer to member function pointer,
   // by inserting the class name specifier before the '*' which represent
@@ -380,12 +436,21 @@ static void findClassNameInsertions(
 
 
 static EditLocation findArrayNameInsertion(StringRef TypeName) {
-  return {EditKind::InsertTypedefName, TypeName.find('[', 0)};
+  return {EditKind::InsertTypedefName,
+          static_cast<unsigned>(TypeName.find('[', 0))};
 }
 
 
 static EditLocation findFunctionPtrNameInsertion(StringRef TypeName) {
-
+  // A function pointer typedef may be like
+  // `typedef int (*(*(*name)(int))(foo_t (**)(int)))()`
+  // The first part is always an identifier name which represent the final
+  // return type, i.e.`int` in the above case.
+  // No parentheses shall be found in the first part.
+  // Then there will be continuous "(*" before the type name.
+  size_t Pos = TypeName.find("(*", 0);
+  do { Pos += 2; } while (TypeName[Pos] == '(');
+  return {EditKind::InsertTypedefName, static_cast<unsigned>(Pos)};
 }
 
 
@@ -404,7 +469,7 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
   QualType UnderlyingType = TD.getUnderlyingType();
 
   DE.Expansion = UnderlyingType.getAsString();
-  findClassNameInsertions(DE.Expansion, DE.EditLocations);
+  findClassnameInsertions(DE.Expansion, DE.EditLocations);
 
   // FunctionPtr or FunctionPtr Array
   bool WithFunctionPtr = !DE.EditLocations.empty();
@@ -417,12 +482,11 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
     DE.EditLocations.emplace_back(findFunctionPtrNameInsertion(DE.Expansion));
   }
 
-  if (!UnderlyingType->isFunctionPointerType()) {
-    if (auto Ref = getDependent(UnderlyingType))
-      DE.ImplRefs.insert(*Ref);
-  } else {
-
-  }
+  DeclDependencyVisitor::scanOn(
+      UnderlyingType,
+      [&DE](const std::string &Name, const RefEntry &Ref) {
+        DE.ImplRefs.try_emplace(Name, Ref);
+      });
 
   SourceRange SR = TD.getSourceRange();
   CharSourceRange AssociatedRange = getAssociatedRange(TD, *Result.Context);
