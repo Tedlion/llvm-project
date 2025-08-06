@@ -4,8 +4,8 @@
  * @date 2024/3/27
  */
 
-#ifndef DECLSCANNER_H
-#define DECLSCANNER_H
+#ifndef LLVM_CLANG_TOOLS_EXTRA_CLASS_WRAPPER_DECLSCANNER_H
+#define LLVM_CLANG_TOOLS_EXTRA_CLASS_WRAPPER_DECLSCANNER_H
 
 #include "ClassWrapperContext.h"
 
@@ -87,11 +87,13 @@ public:
     return Edit != static_cast<unsigned>(EditKind::Invalid);
   }
 
-  auto operator<=>(const EditLocation &other) const {
-    if (Offset == other.Offset)
-      return Edit <=> other.Edit;
-    return Offset <=> other.Offset;
+  auto operator<=>(const EditLocation &Other) const {
+    if (Offset == Other.Offset)
+      return Edit <=> Other.Edit;
+    return Offset <=> Other.Offset;
   }
+
+  bool operator==(const EditLocation &Other) const = default;
 };
 
 struct RefEntry {
@@ -131,11 +133,15 @@ struct DeclEntry {
   hash_code InfHash{0};   // for function only
   hash_code ImplHash{0};
 
+  // use for retrieving the RecordDecl of type on TypedefDecl and VarDecl
+  // Note: only used for comparing the pointers, never dereferencing it.
+  const RecordDecl * RecordID = nullptr;
+
   unsigned IsStatic       : 1 = false; // for functions and variables only
   unsigned NeedExpansion  : 1 = false; // Fails to expand the macro
   unsigned IsDefinition   : 1 = false;
   unsigned IsInline       : 1 = false; // for function only
-  unsigned IsAnonymous    : 1 = false; // for record only
+  unsigned IsUnnamed      : 1 = false; // for record only
   unsigned IsUnion        : 1 = false;
   unsigned IsArray        : 1 = false;
   unsigned IsFunctionPtr  : 1 = false;
@@ -186,14 +192,14 @@ public:
   bool handleBeginSource(CompilerInstance &CI) override;
   void handleEndSource() override;
 
-  void PostHandleNode(const MatchFinder::MatchResult &Result,
+  void postHandleNode(const MatchFinder::MatchResult &Result,
                       const RecordDecl &RD, DeclEntry &Entry);
 
   template <std::derived_from<Decl> NodeType>
-  void HandleNode(const MatchFinder::MatchResult &Result, const NodeType &Node) {
+  void handleNode(const MatchFinder::MatchResult &Result, const NodeType &Node) {
     if (auto Entry = getDeclEntry(Result, Node, *CompilerInstancePtr)) {
       DeclEntries.push_back(std::move(*Entry));
-      PostHandleNode(Result, Node, DeclEntries.back());
+      postHandleNode(Result, Node, DeclEntries.back());
     }
   }
 
@@ -218,7 +224,7 @@ public:
         return;
       }
 
-      Scanner.HandleNode(Result, *Node);
+      Scanner.handleNode(Result, *Node);
     }
   };
 
@@ -244,4 +250,14 @@ private:
 
 } // namespace clang::class_wrapper
 
-#endif // DECLSCANNER_H
+template <>
+struct std::formatter<clang::class_wrapper::EditLocation> :
+public std::formatter<std::string> {
+  auto format(const clang::class_wrapper::EditLocation& Loc, std::format_context& Ctx) const {
+    std::string Result = std::format("EditKind: {}, Offset: {}",
+        static_cast<int>(Loc.getEditKind()), Loc.getOffset());
+    return std::formatter<std::string>::format(Result, Ctx);
+  }
+};
+
+#endif // LLVM_CLANG_TOOLS_EXTRA_CLASS_WRAPPER_DECLSCANNER_H

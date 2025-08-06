@@ -14,6 +14,10 @@
 
 #include <filesystem>
 
+
+#define DEBUG_TYPE "class-wrapper-decl-scanner"
+#define LLVM_DEBUG(x) x
+
 namespace clang::class_wrapper {
 
 const Matcher<Decl> DeclScanner::TypedefDeclMatcher =
@@ -61,7 +65,9 @@ static hash_code getTokenHash(SourceLocation Begin, SourceLocation End,
   Preprocessor &PP = CI.getPreprocessor();
   assert(Begin.isFileID());
 
+  // FIXME: now always from the start
   PP.EnterSourceFile(SM.getFileID(Begin), nullptr, Begin);
+  llvm::errs() << "Begin: " << Begin.printToString(SM) << "\n";
 
   while (true) {
     PP.Lex(Tok);
@@ -69,8 +75,8 @@ static hash_code getTokenHash(SourceLocation Begin, SourceLocation End,
       break;
     std::string TokSpelling = PP.getSpelling(Tok);
     SourceLocation TokLoc = Tok.getLocation();
-    // llvm::errs() << "Hash token: '" << TokSpelling << "' at "
-    //     << TokLoc.printToString(SM) << " " << TokLoc.getRawEncoding() << "\n";
+    llvm::errs() << "Hash token: '" << TokSpelling << "' at "
+        << TokLoc.printToString(SM) << " " << TokLoc.getRawEncoding() << "\n";
     Hash = hash_combine(Hash, TokSpelling);
     if (TokLoc == End)
       break;
@@ -230,21 +236,84 @@ static CharSourceRange getFullRange(SourceRange SR,
 }
 
 
+static void printTypeRef(const std::string &Name) {
+  llvm::errs() << "get Type: " << Name << "\n";
+}
 
 namespace {
-class DeclDependencyVisitor
-    : public RecursiveASTVisitor<DeclDependencyVisitor> {
+class TypeDependencyVisitor
+    : public RecursiveASTVisitor<TypeDependencyVisitor> {
 public:
   using ResultCallback =
     std::function<void(const std::string &, const RefEntry &)>;
 
-  static void scanOn(QualType Type, const ResultCallback & callback) {
-    DeclDependencyVisitor Visitor(callback);
+  static void scanOn(QualType Type, const ResultCallback & Callback) {
+    TypeDependencyVisitor Visitor(Callback);
     Visitor.TraverseType(Type);
   }
 
+  static void scanOn(const Decl &D, const ResultCallback & Callback) {
+    TypeDependencyVisitor Visitor(Callback);
+    Visitor.TraverseDecl(const_cast<Decl *>(&D));
+  }
+
+
   bool TraversePointerType(PointerType *PT) {
-    const QualType Pointee = PT->getPointeeType();
+    if (hasPointeeIndependent(PT))
+      return true;
+    return RecursiveASTVisitor::TraversePointerType(PT);
+  }
+
+
+  bool TraversePointerTypeLoc(PointerTypeLoc PTL) {
+    const PointerType *PT = PTL.getTypePtr();
+    if (hasPointeeIndependent(PT))
+      return true;
+    return RecursiveASTVisitor::TraversePointerTypeLoc(PTL);
+  }
+
+
+  bool VisitRecordDecl(RecordDecl *RD) {
+    if (RD->isCompleteDefinition()) {
+      llvm::errs() << std::format("Visiting RecordDecl: {} {}\n", RD->getName(),
+                            static_cast<void *>(RD));
+      EnclosureRecords.insert(RD);
+    }
+    return true;
+  }
+
+
+  bool VisitElaboratedType(ElaboratedType * ET) {
+    if (RecordDecl * RD = ET->getNamedType()->getAsRecordDecl()) {
+      // If the RecordDecl is already visited, we can skip it.
+      if (EnclosureRecords.contains(RD)) {
+        llvm::errs() << std::format("Skip visiting RecordDecl: {} {}\n",
+                            RD->getName(), static_cast<void *>(RD));
+        return true;
+      }
+    }
+    // Fixme: we ignore the difference between C and C++ here,
+    //  for code `struct S{};`
+    //  symbol `S` is unknown in C, only `struct S` is valid.
+    //  But in C++, `S` is valid.
+    //  Ignore the difference for now, since no occurrences in target codebase.
+    std::string Name = ET->getNamedType().getAsString();
+    if (ET->getKeyword() != ElaboratedTypeKeyword::None)
+      Name = Name.substr(Name.find(' ') + 1);
+    printTypeRef(Name);
+    Callback(Name, RefEntry{Decl::Kind::Typedef, Range(0, 0)});
+    return true;
+  }
+
+private:
+  ResultCallback Callback;
+
+  explicit TypeDependencyVisitor(const ResultCallback &CB) : Callback(CB) {}
+
+  SmallSet<RecordDecl *, 4> EnclosureRecords;
+
+  bool hasPointeeIndependent(const PointerType * PT) {
+    QualType Pointee = PT->getPointeeType();
     const Type *PointeeType = Pointee.getTypePtr();
 
     if (!PointeeType)
@@ -261,40 +330,20 @@ public:
         return true;
     }
 
-    return RecursiveASTVisitor::TraversePointerType(PT);
+    return false;
   }
-
-
-  bool VisitElaboratedType(ElaboratedType * ET) {
-    // Fixme: we ignore the difference between C and C++ here,
-    //  for code `struct S{};`
-    //  symbol `S` is unknown in C, only `struct S` is valid.
-    //  But in C++, `S` is valid.
-    //  Ignore the difference for now, since no occurrences in target codebase.
-
-    std::string Name = ET->getNamedType().getAsString();
-    if (ET->getKeyword() != ElaboratedTypeKeyword::None)
-      Name = Name.substr(Name.find(' ') + 1);
-    //llvm::errs() << "ElaboratedType: " << Name << "\n";
-    Callback(Name, RefEntry{Decl::Kind::Typedef, Range(0, 0)});
-    return true;
-  }
-
-private:
-  ResultCallback Callback;
-
-  explicit DeclDependencyVisitor(const ResultCallback &CB) : Callback(CB) {}
-
 };
 
-};
+} // namespace
 
 
 
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const RecordDecl &RD,
                                       const CompilerInstance &CI) {
-  // Ignore RecordDecl in local scope
+  // FIXME: Not all RecordDecl in local scope can be ignored,  for a local
+  //  RecordDecl with function pointer field, an edition of transferring it to
+  //  member function pointer is required.
   const DeclContext * DC = RD.getDeclContext();
   if (DC->isFunctionOrMethod()) {
     return std::nullopt;
@@ -309,7 +358,6 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
   if (!Parents[0].get<TranslationUnitDecl>())
     return std::nullopt;
 
-  // TODO: nested case
   const SourceManager &SM = *Result.SourceManager;
   DeclEntry DE;
 
@@ -322,9 +370,10 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
   llvm::errs() << "\n";
 
   DE.Name = RD.getName().str();
-  DE.IsAnonymous = DE.Name.empty();
+  DE.IsUnnamed = DE.Name.empty();
   DE.FilePath = SM.getFilename(RD.getBeginLoc()).str();
   DE.Kind = RD.getKind();
+  DE.RecordID = &RD;
   DE.IsUnion = RD.isUnion();
   DE.IsDefinition = RD.isCompleteDefinition();
   CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
@@ -337,21 +386,17 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
     return DE;
   }
 
-  if (DE.IsDefinition)
-    DE.ImplHash = getTokenHash(SBegin, SEnd, SM, CI);
   DE.FullRange = getRangeFromAssociated(AssociatedRange, SM);
 
-  llvm::errs() << "decls:\n";
-  SmallSet<const RecordDecl *, 8> ClosureDecls;
-  ClosureDecls.insert(&RD);
-  for (const auto * TheDecl : RD.decls()) {
-    if (const RecordDecl * NestedRD = dyn_cast<RecordDecl>(TheDecl))
-      ClosureDecls.insert(NestedRD);
-    else if (const auto * Field = dyn_cast<FieldDecl>(TheDecl)) {
-      llvm::errs() << "Field: " << Field->getName() << "\n";
-      const Type * FieldType = Field->getType().getTypePtr();
-    }
-  }
+  if (!DE.IsDefinition)
+    return DE;
+
+  DE.ImplHash = getTokenHash(SBegin, SEnd, SM, CI);
+  TypeDependencyVisitor::scanOn(
+      RD,
+      [&DE](const std::string &Name, const RefEntry &Ref) {
+        DE.ImplRefs.try_emplace(Name, Ref);
+      });
 
   return DE;
 }
@@ -431,6 +476,7 @@ static void findClassnameInsertions(
       break;
 
     EditLocations.emplace_back(EditKind::InsertClassName, From + 1);
+    From += 2;
   }
 }
 
@@ -454,9 +500,25 @@ static EditLocation findFunctionPtrNameInsertion(StringRef TypeName) {
 }
 
 
+static QualType removeArray(QualType QT) {
+  while (const auto *AT = dyn_cast<ArrayType>(QT.getTypePtr())) {
+    QT =  AT->getElementType();
+  }
+  return QT;
+}
+
+
 std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const TypedefDecl &TD,
                                       const CompilerInstance &CI) {
+  // FIXME: Not all TypedefDecls in local scope can be ignored,  for a local
+  //  typedef on function pointer, an edition of transferring it to member
+  //  function pointer is required.
+  const DeclContext * DC = TD.getDeclContext();
+  if (DC->isFunctionOrMethod()) {
+    return std::nullopt;
+  }
+
   const SourceManager &SM = *Result.SourceManager;
   TD.dump();
   // llvm::errs() << std::format("UnderlyingType: {}\n", TD.getUnderlyingType().getAsString());
@@ -467,6 +529,11 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
   DE.Kind = TD.getKind();
 
   QualType UnderlyingType = TD.getUnderlyingType();
+
+  QualType RemoveArrayType = removeArray(UnderlyingType);
+  if (const ElaboratedType * ET = dyn_cast<ElaboratedType>(RemoveArrayType.getTypePtr()))
+    if (const RecordType * RT = dyn_cast<RecordType>(ET->getNamedType().getTypePtr()))
+      DE.RecordID = RT->getDecl();
 
   DE.Expansion = UnderlyingType.getAsString();
   findClassnameInsertions(DE.Expansion, DE.EditLocations);
@@ -482,23 +549,27 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
     DE.EditLocations.emplace_back(findFunctionPtrNameInsertion(DE.Expansion));
   }
 
-  DeclDependencyVisitor::scanOn(
+  TypeDependencyVisitor::scanOn(
       UnderlyingType,
       [&DE](const std::string &Name, const RefEntry &Ref) {
-        DE.ImplRefs.try_emplace(Name, Ref);
+        if (Name != DE.Name) // there is a self-ref sugar name?
+          DE.ImplRefs.try_emplace(Name, Ref);
       });
 
+  // The FullRange is the range to remove the typedef from the original source
+  // Generating new does not rely on the old source.
   SourceRange SR = TD.getSourceRange();
   CharSourceRange AssociatedRange = getAssociatedRange(TD, *Result.Context);
   if (AssociatedRange.isInvalid())
     AssociatedRange = getFullRange(SR, SM, CI.getLangOpts());
   DE.FullRange = getRangeFromAssociated(AssociatedRange, SM);
 
+  llvm::sort(DE.EditLocations);
   return DE;
 }
 
 
-void DeclScanner::PostHandleNode(const MatchFinder::MatchResult &Result,
+void DeclScanner::postHandleNode(const MatchFinder::MatchResult &Result,
                                  const RecordDecl &RD, DeclEntry &Entry) {
 
 }
