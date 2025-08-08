@@ -59,24 +59,31 @@ static hash_code getTokenHash(SourceLocation Begin, SourceLocation End,
                               const SourceManager &SM,
                               const CompilerInstance &CI) {
   hash_code Hash(0);
-
   Token Tok;
-
   Preprocessor &PP = CI.getPreprocessor();
+
+  // FIXME: Calculate the hash of the preprocessed result
+  //  The current implementation fails when the Begin is not unique
+  // llvm::errs() << "Begin: " << Begin.printToString(SM) << "\n";
   assert(Begin.isFileID());
 
   // FIXME: now always from the start
   PP.EnterSourceFile(SM.getFileID(Begin), nullptr, Begin);
-  llvm::errs() << "Begin: " << Begin.printToString(SM) << "\n";
 
+  bool BeginFound = false;
   while (true) {
     PP.Lex(Tok);
     if (Tok.is(tok::eof))
       break;
-    std::string TokSpelling = PP.getSpelling(Tok);
     SourceLocation TokLoc = Tok.getLocation();
-    llvm::errs() << "Hash token: '" << TokSpelling << "' at "
-        << TokLoc.printToString(SM) << " " << TokLoc.getRawEncoding() << "\n";
+    if (TokLoc == Begin)
+      BeginFound = true;
+    if (!BeginFound)
+      continue;
+
+    std::string TokSpelling = PP.getSpelling(Tok);
+    // llvm::errs() << "Hash token: '" << TokSpelling << "' at "
+    //     << TokLoc.printToString(SM) << " " << TokLoc.getRawEncoding() << "\n";
     Hash = hash_combine(Hash, TokSpelling);
     if (TokLoc == End)
       break;
@@ -175,7 +182,7 @@ expandOnLocations(const SmallSet<SourceLocation, 3> &ExpansionLocs,
 static CharSourceRange getFullRange(SourceRange SR,
                                     const SourceManager &SM,
                                     const LangOptions &LangOpts) {
-  llvm::errs() << "SourceRange: " << SR.printToString(SM) << "\n";
+  // llvm::errs() << "SourceRange: " << SR.printToString(SM) << "\n";
   CharSourceRange Range = CharSourceRange::getCharRange(SR);
   if (SR.getBegin().isMacroID())
     Range.setBegin(SM.getExpansionLoc(SR.getBegin()));
@@ -193,8 +200,8 @@ static CharSourceRange getFullRange(SourceRange SR,
 
   if (Invalid) {
     Range.setEnd(End);
-    llvm::errs() << "Buffer Invalid, Full Range: " << Range.getAsRange().
-        printToString(SM) << "\n";
+    // llvm::errs() << "Buffer Invalid, Full Range: " << Range.getAsRange().
+    //     printToString(SM) << "\n";
     return Range;
   }
 
@@ -205,8 +212,8 @@ static CharSourceRange getFullRange(SourceRange SR,
   TheLexer.SetCommentRetentionState(true);
 
   while (!TheLexer.LexFromRawLexer(Tok)) {
-    llvm::errs() << "Token: " << Tok.getName() << " at "
-        << Tok.getLocation().printToString(SM) << "\n";
+    // llvm::errs() << "Token: " << Tok.getName() << " at "
+    //     << Tok.getLocation().printToString(SM) << "\n";
     if (Tok.is(tok::semi) || Tok.is(tok::comment)) {
       End = Tok.getEndLoc();
     } else {
@@ -230,14 +237,14 @@ static CharSourceRange getFullRange(SourceRange SR,
   }
 
   Range.setEnd(End);
-  llvm::errs() << "Full Range: " << Range.getAsRange().printToString(SM) <<
-      "\n";
+  // llvm::errs() << "Full Range: " << Range.getAsRange().printToString(SM) <<
+  //     "\n";
   return Range;
 }
 
 
 static void printTypeRef(const std::string &Name) {
-  llvm::errs() << "get Type: " << Name << "\n";
+  // llvm::errs() << "get Type: " << Name << "\n";
 }
 
 namespace {
@@ -275,8 +282,8 @@ public:
 
   bool VisitRecordDecl(RecordDecl *RD) {
     if (RD->isCompleteDefinition()) {
-      llvm::errs() << std::format("Visiting RecordDecl: {} {}\n", RD->getName(),
-                            static_cast<void *>(RD));
+      // llvm::errs() << std::format("Visiting RecordDecl: {} {}\n", RD->getName(),
+      //                       static_cast<void *>(RD));
       EnclosureRecords.insert(RD);
     }
     return true;
@@ -284,14 +291,23 @@ public:
 
 
   bool VisitElaboratedType(ElaboratedType * ET) {
-    if (RecordDecl * RD = ET->getNamedType()->getAsRecordDecl()) {
-      // If the RecordDecl is already visited, we can skip it.
-      if (EnclosureRecords.contains(RD)) {
-        llvm::errs() << std::format("Skip visiting RecordDecl: {} {}\n",
-                            RD->getName(), static_cast<void *>(RD));
-        return true;
+    // llvm::errs() << std::format("Visiting ElaboratedType: {} {}\n",
+    //                         ET->getNamedType().getAsString(),
+    //                         static_cast<void *>(ET));
+    if (const RecordType *RT = dyn_cast<RecordType>(
+        ET->getNamedType().getTypePtr()))
+      if (RecordDecl *RD = RT->getDecl()) {
+        if (!RD->getIdentifier())
+          return true;
+
+        // If the RecordDecl is already visited, we can skip it.
+        if (EnclosureRecords.contains(RD)) {
+          // llvm::errs() << std::format("Skip visiting RecordDecl: {} {}\n",
+          //                             RD->getName(), static_cast<void *>(RD));
+          return true;
+        }
       }
-    }
+
     // Fixme: we ignore the difference between C and C++ here,
     //  for code `struct S{};`
     //  symbol `S` is unknown in C, only `struct S` is valid.
@@ -361,13 +377,13 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
   const SourceManager &SM = *Result.SourceManager;
   DeclEntry DE;
 
-  RD.dump();
+  // RD.dump();
   SourceRange SR = RD.getSourceRange();
   SourceLocation SBegin = SR.getBegin();
   SourceLocation SEnd = SR.getEnd();
 
-  SR.print(llvm::errs(), SM);
-  llvm::errs() << "\n";
+  // SR.print(llvm::errs(), SM);
+  // llvm::errs() << "\n";
 
   DE.Name = RD.getName().str();
   DE.IsUnnamed = DE.Name.empty();
@@ -520,7 +536,7 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
   }
 
   const SourceManager &SM = *Result.SourceManager;
-  TD.dump();
+  // TD.dump();
   // llvm::errs() << std::format("UnderlyingType: {}\n", TD.getUnderlyingType().getAsString());
 
   DeclEntry DE;

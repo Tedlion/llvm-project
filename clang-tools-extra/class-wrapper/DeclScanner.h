@@ -64,8 +64,8 @@ enum class EditKind {
 };
 
 class EditLocation {
-  unsigned Edit           : 4; // EditKind
-  unsigned Offset         : 28;
+  unsigned Edit           : 8; // EditKind
+  unsigned Offset         : 24;
 
 public:
   EditLocation(EditKind Kind, unsigned Offset)
@@ -111,8 +111,9 @@ struct RefEntry {
 
 struct DeclEntry {
   std::string Name;
-  std::string FilePath; // source file's path relative to SourceRoot
   Decl::Kind Kind;
+
+  std::string FilePath; // source file's path relative to SourceRoot
 
   // The Expansion is only necessary when:
   // 1. Larger than the Decl, or
