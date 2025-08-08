@@ -1,15 +1,15 @@
 # About Class Wrapper
-Class Wrapper is designed to be an independent tool to wrap all code of a build target with one single class. So that multiple objects of the class can be created without copying the text section. Furthermore, functions and variables of different objects can be visited with the universal interface. 
+Class Wrapper is designed to be an independent tool to wrap all code of a build target with one single class. So that multiple objects of the class can be created without copying the text section. Furthermore, types, functions and variables of different objects can be accessed by the universal class members interface. 
 
 # Design Details
 ## Input Multiple CompilationDatabase
 
-## Scanning Once
+## Scanning Each Source File
 Find all TypeDecl, FunctionDecl, and VarDecl.
 
 One map for each target, record (**name**(as key), src_location(for replacement), hash(to check consistency)) 
 
-Decide the namespace for each TypeDecl.
+Decide the class for each TypeDecl.
 
 Decide the class each function and variable should be in.
 
@@ -42,7 +42,7 @@ Make them global, or static?
 Even being non-static seems OK, which may lose some efficiency.
 
 ## Type:
-in namespace
+in class
 ## Global/Static Variable:
 class member
 ## Global/Static Function:
@@ -75,18 +75,16 @@ Leave others unchanged for readability.
 ```cpp
 export module dut;
 
-namespace test_plat::dut {
-struct common_type {
-  ...
-};
-
 class DUT {
 public:
+  struct common_type {
+    ...
+  };
+  
   void common_func(common_type arg);
 
   virtual void func_same_inf_differnet_impl(common_type arg) = 0;
 };
-};  // namespace test_plat::dut
 ```
 
 - cco.cppm
@@ -94,23 +92,22 @@ public:
 export module dut.cco;
 import dut;
 
-namespace test_plat::dut::cco{
-struct type1{
-    ...
-};
-
-struct type2 {
-    ...
-};
 class CCO : public DUT{
 public:
-    void func_same_inf_differnet_impl(common_type arg) override;
+  struct type1{
+    ...
+  };
+  
+  struct type2 {
+    ...
+  };
 
-    void func1(type1 arg);
-    
-    void func2(type2 arg);
+  void func_same_inf_differnet_impl(common_type arg) override;
+  
+  void func1(type1 arg);
+  
+  void func2(type2 arg);
 };
-};  // namespace test_plat::dut::cco
 ```
 
 - sta.cppm
@@ -118,24 +115,22 @@ public:
 export module dut.sta;
 import dut;
 
-namespace test_plat::dut::sta{
-struct type1{
-    ...
-};
-
-struct type3 {
-    ...
-};
-
 class STA : public DUT{
 public:
-    void func_same_inf_differnet_impl(common_type arg) override;
+  struct type1 {
+    ...
+  };
+  
+  struct type3 {
+    ...
+  };
+  
+  void func_same_inf_differnet_impl(common_type arg) override;
 
-    void func1(type1 arg);
+  void func1(type1 arg);
     
-    void func3(type3 arg);
+  void func3(type3 arg);
 };
-};  // test_plat::dut::sta
 ```
 
 
@@ -145,12 +140,12 @@ public:
 - Move inline function definitions to new modules.
 
 ### For Sources:
-- Import modules and using namespace at beginning
+- Import modules at beginning
 - Delete all declarations, including type, function and variable declarations.
 - Add class name before all function definitions.
 
 ## Check Code Consistency _(Advanced)_:
-If a type is completely same among all dut types, it is regarded to be **consistent**, and it is supposed to be put in common namespace.
+If a type is completely same among all dut types, it is regarded to be **consistent**, and it is supposed to be put in common class.
 To be more specific, a pointer type is considered to be consistent if and only if the pointed type is consistent. A struct is considered to be consistent if and only if all its fields, including **types and names**, are consistent.
 
 A non-local variable is considered to be consistent if and only if its type and name is consistent. A consistent non-local variable is supposed to be put in base class.
@@ -171,20 +166,32 @@ We judge two symbols are consistent if and only if the following two conditions 
 - RecordDecls must be defined in dependency orders
 - Solve the insufficient visiting problem of ODRHash RecordDecl 
 ### Record what?
-#### RecordDecls£º
+#### RecordDecls:
 - non-built-in types of all fields
-#### VarDecls (not local)£º
+#### VarDecls (not local):
 - the type if it is not built-in
 - variables and non-built-in types in the initialization expression (if exists)
-#### FunctionDecls (not the definition body)£º
+#### FunctionDecls (not the definition body):
 - non-built-in types of all parameters and return type.
-#### FunctionDecls (definition body)£º
+#### FunctionDecls (definition body):
 - All RecordDecls ref in the function body
 - All non-local var ref
 - All functions ref
 ### How to record?
 - Some of RecordsDecls/global variables maybe not defined.
 - Set of (Names, Source Range)?
+
+## Scanning From the Source and Preprocessed:
+
+| Kind       | Typedef | Record | Enum  | VarDecl | FuncDecl(in .h)  | FuncDecl(in .c)  |
+|------------|---------|--------|-------|---------|------------------|------------------|
+| Name       | S       | S      | -     | S       | S                | S                |
+| Path       | S, PP   | S, PP  | S, PP | S, PP   | S, PP            | S, PP            |
+| FullRange  | S, PP   | S, PP  | S, PP | S, PP   | S, PP            | S, PP            |
+| InfHash    | -       | -      | -     | -       | PP               | PP               |
+| ImplHash   | PP      | PP     | PP    | PP      | PP (for def)     | PP (for def)     |
+| ToRemove   | Y       | Y      | Y     | Y       | Y                | N (except macro) |
+| AddToClass | Y       | Y      | Y     | Y       | Y (include body) | N (except body)  |   
 
 ## TODO Lists:
 - [x] Accept multiple compilation database argument in command line
