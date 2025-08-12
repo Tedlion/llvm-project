@@ -185,11 +185,11 @@ public:
   static constexpr char DeclRefExprID[] = "declRefExpr";
   static const Matcher<Stmt> DeclRefExprMatcher;
 
-  static void run(StringRef Target, ArrayRef<std::string> Filenames,
-                    const CompilationDatabase &Compilations,
-                    const ClassWrapperContext &Context);
+  static void run(StringRef Target, StringRef Filename,
+                  const CompilationDatabase &Compilations,
+                  const ClassWrapperContext &Context);
 
-  // Implemation of interface of SourceFileCallbacks
+  // Implementation of interface of SourceFileCallbacks
   bool handleBeginSource(CompilerInstance &CI) override;
   void handleEndSource() override;
 

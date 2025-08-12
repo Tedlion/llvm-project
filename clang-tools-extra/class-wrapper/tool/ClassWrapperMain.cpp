@@ -9,6 +9,7 @@
 #include "../ClassWrapperContext.h"
 #include "../DeclScanner.h"
 #include "../FileFilter.h"
+#include "../Support.h"
 
 #include "clang/Tooling/CommonOptionsParser.h"
 #include "clang/Tooling/Tooling.h"
@@ -20,7 +21,9 @@
 
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <thread>
+
 
 using namespace clang;
 using namespace clang::class_wrapper;
@@ -108,6 +111,30 @@ cl::opt<unsigned> Parallel(
 } // namespace
 
 
+static bool requireRescan(StringRef Target, StringRef RelativePath,
+                          const ClassWrapperContext &Context) {
+  std::string DependencyPath = Context.getDependencyPath(Target, RelativePath);
+  std::string ScanResultPath = Context.getScanResultPath(Target, RelativePath);
+
+  if (needUpdate(DependencyPath, ScanResultPath) ||
+      needUpdate(Target, DependencyPath))
+    return true;
+
+  std::vector<std::string> Dependencies;
+  std::ifstream DependencyFile(DependencyPath);
+  std::string Line;
+
+  while (std::getline(DependencyFile, Line)) {
+    StringRef Trimmed = StringRef(Line).trim();
+    if (Trimmed.empty())
+      continue;
+    Dependencies.push_back(Trimmed.str());
+  }
+
+  return needUpdate(Target, Dependencies);
+}
+
+
 int main(int argc, const char **argv) {
   sys::PrintStackTraceOnErrorSignal(argv[0]);
   cl::HideUnrelatedOptions(ClassWrapperCategory);
@@ -159,11 +186,12 @@ int main(int argc, const char **argv) {
       if (!SrcFilter.isMatched(Filename))
         continue;
 
-      using std::filesystem::path;
-      using std::filesystem::relative;
-      auto RelativePath = relative(path(Filename), path(SourceRoot.getValue()));
-      // ScanningFiles.push_back(Filepath);
-      llvm::outs() << RelativePath.generic_string() << "\n";
+      std::string RelativePath = Context.getRelativePath(Filename);
+      if (!ReScan && !requireRescan(Target, RelativePath, Context)) {
+        llvm::outs() << std::format("  Skip: {}\n", RelativePath);
+        continue;
+      }
+      llvm::outs() << std::format("  Scan: {}\n", RelativePath);
 
       Tasks.spawn([&] {
         DeclScanner::run(Target, Filename, *AdjustingCompilations, Context);
