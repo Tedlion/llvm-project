@@ -18,9 +18,8 @@
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Support/VirtualFileSystem.h"
 
+#include <filesystem>
 #include <map>
-#include <set>
-
 
 namespace clang::class_wrapper {
 
@@ -95,6 +94,47 @@ public:
     }
 
     return !NonWrappedFilter.isMatched(NormalFilePath);
+  }
+
+
+  std::string getRelativePath(StringRef FilePath) const {
+    std::string NormalFilePath = llvm::pathNormalize(FilePath.str());
+    if (SourceRoot.empty())
+      return NormalFilePath;
+    if (NormalFilePath.find(SourceRoot) != 0)
+      return NormalFilePath;
+    return NormalFilePath.substr(SourceRoot.size());
+  }
+
+
+  llvm::Twine getTargetPath (StringRef Target,
+                                  StringRef RelativePath) const {
+    StringRef Sep = RelativePath[0] == '/' ? "" : "/";
+    return TargetRoot + Sep + RelativePath + "." + Target;
+  }
+
+
+  std::string getPreprocessedPath(StringRef Target,
+                                  StringRef RelativePath) const {
+    return (getTargetPath(Target, RelativePath) + ".i").str();
+  }
+
+
+  std::string getDependencyPath(StringRef Target,
+                                  StringRef RelativePath) const {
+    return (getTargetPath(Target, RelativePath) + ".d").str();
+  }
+
+
+  std::string getCppSourcePath(StringRef Target,
+                                  StringRef RelativePath) const {
+    return (getTargetPath(Target, RelativePath) + ".cpp").str();
+  }
+
+
+  std::string getScanResultPath(StringRef Target,
+                                  StringRef RelativePath) const {
+    return (getTargetPath(Target, RelativePath) + ".dsr").str();
   }
 
   StringRef getScanningTarget() const { return ScanningTarget; }

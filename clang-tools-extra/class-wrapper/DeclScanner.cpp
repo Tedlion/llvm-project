@@ -8,12 +8,14 @@
 #include "Support.h"
 
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/Frontend/FrontendActions.h"
+#include "clang/Frontend/PreprocessorOutputOptions.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/Tooling/Tooling.h"
 #include "clang/Tooling/Transformer/SourceCode.h"
 
 #include <filesystem>
-
+#include <fstream>
 
 #define DEBUG_TYPE "class-wrapper-decl-scanner"
 #define LLVM_DEBUG(x) x
@@ -619,10 +621,95 @@ void DeclScanner::handleEndSource() {
 }
 
 
-void DeclScanner::run(StringRef Target, ArrayRef<std::string> Filenames,
+static bool needUpdate(StringRef TargetFile, ArrayRef<std::string> Dependencies) {
+  using namespace llvm::sys::fs;
+  file_status Target, Dependency;
+  if (status(TargetFile, Target))
+    return true;
+  auto TargetModified = Target.getLastModificationTime();
+  for (auto &DepFile : Dependencies) {
+    if (status(DepFile, Dependency))
+      continue;
+    auto DepModified = Dependency.getLastModificationTime();
+    if (DepModified > TargetModified)
+      return true; // dependency is newer than target
+  }
+  return false;
+}
+
+
+namespace {
+class PrintPreprocessedAndDependenciesAction :
+    public PrintPreprocessedAction, public SourceFileCallbacks {
+public:
+
+  bool handleBeginSource(CompilerInstance &CI) override {
+    PreprocessorOutputOptions & Opts = CI.getPreprocessorOutputOpts();
+    Opts.KeepSystemIncludes = true;
+    // TODO: set output
+    Collector->attachToPreprocessor(CI.getPreprocessor());
+    return true;
+  }
+
+  void handleEndSource() override {
+    // Print the dependencies collected by the collector
+    auto Dependencies = Collector->getDependencies();
+    std::ofstream DepFile();
+  }
+
+private:
+  std::unique_ptr<DependencyCollector> Collector = std::make_unique<DependencyCollector>();
+  std::string DependencyPath;
+  std::string PreprocessedPath;
+
+};
+
+
+};
+
+
+
+
+void DeclScanner::run(StringRef Target, StringRef Filename,
                       const CompilationDatabase &Compilations,
                       const ClassWrapperContext &Context) {
-  ClangTool Tool(Compilations, Filenames,
+  std::string RelativePath = Context.getRelativePath(Filename);
+  std::string DependencyPath = Context.getDependencyPath(Target, RelativePath);
+  std::string PreprocessedPath = Context.getPreprocessedPath(Target, RelativePath);
+  std::string ScanResultPath = Context.getScanResultPath(Target, RelativePath);
+
+
+
+
+  auto Commands = Compilations.getCompileCommands(Filename);
+
+  CompilerInstance CI;
+  CI.createDiagnostics(*Context.getBaseFS());
+
+  // Set up the preprocessor and other components
+  FileManager * FM = CI.createFileManager();
+  CI.createSourceManager(*FM);
+  CI.createPreprocessor(TU_Complete);
+
+  // Attach the dependency collector
+  auto Collector = std::make_unique<DependencyCollector>();
+  Collector->attachToPreprocessor(CI.getPreprocessor());
+
+  // Set the main file
+  const FileEntry *File = CI.getFileManager().getFile("example.cpp");
+  CI.getSourceManager().setMainFileID(
+      CI.getSourceManager().createFileID(File, SourceLocation(), SrcMgr::C_User));
+  CI.getPreprocessor().EnterMainSourceFile();
+
+  // Generate preprocessed output
+  std::error_code EC;
+  llvm::raw_fd_ostream PreprocessedFile("example.i", EC, llvm::sys::fs::OF_Text);
+  if (EC) {
+    llvm::errs() << "Error opening file for preprocessed output: " << EC.message() << "\n";
+    return 1;
+  }
+
+  ClangTool Tool(Compilations, Filename.str(),
                  std::make_shared<PCHContainerOperations>(),
                  Context.getBaseFS(), Context.getFiles());
   DeclScanner Scanner(Target, Filenames, Context);

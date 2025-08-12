@@ -17,4 +17,14 @@ struct std::formatter<llvm::StringRef> : std::formatter<std::string_view> {
   }
 };
 
+
+namespace clang::class_wrapper {
+
+bool needUpdate(StringRef TargetFile, ArrayRef<std::string> Dependencies);
+
+}
+
+
+
+
 #endif // SUPPORT_H
