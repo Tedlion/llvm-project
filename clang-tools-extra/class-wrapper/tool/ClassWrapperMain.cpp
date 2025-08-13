@@ -182,6 +182,12 @@ int main(int argc, const char **argv) {
           getInsertArgumentAdjuster(Arg.data()));
     }
 
+    AdjustingCompilations->appendArgumentsAdjuster(
+        getInsertArgumentAdjuster("-w"));
+
+    AdjustingCompilations->appendArgumentsAdjuster(
+        getInsertArgumentAdjuster("-Wno-error"));
+
     for (auto & Filename : AdjustingCompilations->getAllFiles()) {
       if (!SrcFilter.isMatched(Filename))
         continue;

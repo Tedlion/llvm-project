@@ -7,7 +7,10 @@
 #ifndef SUPPORT_H
 #define SUPPORT_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/StringRef.h"
+
+#include "clang/Basic/LLVM.h"
 #include <format>
 
 template <>
