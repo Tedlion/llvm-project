@@ -12,6 +12,7 @@ add_clang_library(classWrapper
         FileFilter.cpp
         ClassWrapperContext.cpp
         MacroExpansionRecorder.cpp
+        Support.cpp
 )
 
 target_compile_definitions(classWrapper PRIVATE _SILENCE_CXX23_ALIGNED_UNION_DEPRECATION_WARNING)

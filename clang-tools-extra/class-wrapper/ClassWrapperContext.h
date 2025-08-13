@@ -107,34 +107,34 @@ public:
   }
 
 
-  llvm::Twine getTargetPath (StringRef Target,
-                                  StringRef RelativePath) const {
+  std::string getTargetPath(StringRef Target,
+                            StringRef RelativePath) const {
     StringRef Sep = RelativePath[0] == '/' ? "" : "/";
-    return TargetRoot + Sep + RelativePath + "." + Target;
+    return (TargetRoot + Sep + RelativePath + "." + Target).str();
   }
 
 
   std::string getPreprocessedPath(StringRef Target,
                                   StringRef RelativePath) const {
-    return (getTargetPath(Target, RelativePath) + ".i").str();
+    return getTargetPath(Target, RelativePath) + ".i";
   }
 
 
   std::string getDependencyPath(StringRef Target,
                                   StringRef RelativePath) const {
-    return (getTargetPath(Target, RelativePath) + ".d").str();
+    return getTargetPath(Target, RelativePath) + ".d";
   }
 
 
   std::string getCppSourcePath(StringRef Target,
                                   StringRef RelativePath) const {
-    return (getTargetPath(Target, RelativePath) + ".cpp").str();
+    return getTargetPath(Target, RelativePath) + ".cpp";
   }
 
 
   std::string getScanResultPath(StringRef Target,
                                   StringRef RelativePath) const {
-    return (getTargetPath(Target, RelativePath) + ".dsr").str();
+    return getTargetPath(Target, RelativePath) + ".dsr";
   }
 
   StringRef getScanningTarget() const { return ScanningTarget; }

@@ -610,8 +610,8 @@ bool DeclScanner::handleBeginSource(CompilerInstance &CI) {
   using namespace std::filesystem;
   RelativeCurrentFilePath = relative(path(CurrentFilePath),
                                      path(Context.SourceRoot)).generic_string();
-  MacroContext = std::make_unique<MacroExpansionRecorder>(CI.getLangOpts());
-  MacroContext->registerForPreprocessor(CI.getPreprocessor());
+  // MacroContext = std::make_unique<MacroExpansionRecorder>(CI.getLangOpts());
+  // MacroContext->registerForPreprocessor(CI.getPreprocessor());
   return true;
 }
 
@@ -621,51 +621,89 @@ void DeclScanner::handleEndSource() {
 }
 
 
-static bool needUpdate(StringRef TargetFile, ArrayRef<std::string> Dependencies) {
-  using namespace llvm::sys::fs;
-  file_status Target, Dependency;
-  if (status(TargetFile, Target))
-    return true;
-  auto TargetModified = Target.getLastModificationTime();
-  for (auto &DepFile : Dependencies) {
-    if (status(DepFile, Dependency))
-      continue;
-    auto DepModified = Dependency.getLastModificationTime();
-    if (DepModified > TargetModified)
-      return true; // dependency is newer than target
-  }
-  return false;
-}
-
-
 namespace {
-class PrintPreprocessedAndDependenciesAction :
-    public PrintPreprocessedAction, public SourceFileCallbacks {
+class PrintPreprocessedAndDependencies : public PreprocessorFrontendAction {
 public:
+  PrintPreprocessedAndDependencies(const std::string &DependencyPath,
+                                 const std::string &PreprocessedPath)
+  : DependencyPath(DependencyPath), PreprocessedPath(PreprocessedPath) {
+  }
 
-  bool handleBeginSource(CompilerInstance &CI) override {
+
+  bool BeginSourceFileAction(CompilerInstance &CI) override {
     PreprocessorOutputOptions & Opts = CI.getPreprocessorOutputOpts();
+    Opts.ShowCPP = true;
     Opts.KeepSystemIncludes = true;
-    // TODO: set output
+    Opts.ShowLineMarkers = false;
     Collector->attachToPreprocessor(CI.getPreprocessor());
     return true;
   }
 
-  void handleEndSource() override {
+
+  void EndSourceFileAction() override {
     // Print the dependencies collected by the collector
+    std::ofstream DepFile(DependencyPath);
     auto Dependencies = Collector->getDependencies();
-    std::ofstream DepFile();
+    for (const auto &Dep : Dependencies) {
+      DepFile << Dep << "\n";
+    }
+  }
+
+
+  void ExecuteAction() override {
+    CompilerInstance &CI = getCompilerInstance();
+
+    std::error_code EC;
+    using namespace llvm::sys::fs;
+    SmallString<128> PreprocessedDir(PreprocessedPath);
+    sys::path::remove_filename(PreprocessedDir); // Get the directory path
+    EC = create_directories(PreprocessedDir);
+    if (EC) {
+      llvm::errs() << "Error creating directories: " << EC.message() << "\n";
+      return;
+    }
+    raw_fd_ostream PreprocessedFile(PreprocessedPath, EC, CD_CreateAlways,
+                                          FA_Write, OF_Text);
+
+    if (EC) {
+      llvm::errs() << "Error creating file: " << EC.message() << "\n";
+      return;
+    }
+
+    DoPrintPreprocessedInput(CI.getPreprocessor(), &PreprocessedFile,
+                             CI.getPreprocessorOutputOpts());
+  }
+
+
+  std::unique_ptr<FrontendActionFactory> newFactory() const {
+    class Factory : public FrontendActionFactory {
+      const std::string &DependencyPath;
+      const std::string &PreprocessedPath;
+
+    public:
+      Factory(const std::string &DependencyPath,
+              const std::string &PreprocessedPath)
+        : DependencyPath(DependencyPath), PreprocessedPath(PreprocessedPath) {
+      }
+
+
+      std::unique_ptr<FrontendAction> create() override {
+        return std::make_unique<PrintPreprocessedAndDependencies>(
+            DependencyPath, PreprocessedPath);
+      }
+    };
+
+    return std::unique_ptr<FrontendActionFactory>(
+        new Factory(DependencyPath, PreprocessedPath));
   }
 
 private:
   std::unique_ptr<DependencyCollector> Collector = std::make_unique<DependencyCollector>();
   std::string DependencyPath;
   std::string PreprocessedPath;
-
 };
 
-
-};
+} // namespace
 
 
 
@@ -678,41 +716,16 @@ void DeclScanner::run(StringRef Target, StringRef Filename,
   std::string PreprocessedPath = Context.getPreprocessedPath(Target, RelativePath);
   std::string ScanResultPath = Context.getScanResultPath(Target, RelativePath);
 
-
-
-
-  auto Commands = Compilations.getCompileCommands(Filename);
-
-  CompilerInstance CI;
-  CI.createDiagnostics(*Context.getBaseFS());
-
-  // Set up the preprocessor and other components
-  FileManager * FM = CI.createFileManager();
-  CI.createSourceManager(*FM);
-  CI.createPreprocessor(TU_Complete);
-
-  // Attach the dependency collector
-  auto Collector = std::make_unique<DependencyCollector>();
-  Collector->attachToPreprocessor(CI.getPreprocessor());
-
-  // Set the main file
-  const FileEntry *File = CI.getFileManager().getFile("example.cpp");
-  CI.getSourceManager().setMainFileID(
-      CI.getSourceManager().createFileID(File, SourceLocation(), SrcMgr::C_User));
-  CI.getPreprocessor().EnterMainSourceFile();
-
-  // Generate preprocessed output
-  std::error_code EC;
-  llvm::raw_fd_ostream PreprocessedFile("example.i", EC, llvm::sys::fs::OF_Text);
-  if (EC) {
-    llvm::errs() << "Error opening file for preprocessed output: " << EC.message() << "\n";
-    return 1;
-  }
+  PrintPreprocessedAndDependencies PDAction(DependencyPath, PreprocessedPath);
+  ClangTool PDTool(Compilations, Filename.str(),
+                 std::make_shared<PCHContainerOperations>(),
+                 Context.getBaseFS(), Context.getFiles());
+  PDTool.run(PDAction.newFactory().get());
 
   ClangTool Tool(Compilations, Filename.str(),
                  std::make_shared<PCHContainerOperations>(),
                  Context.getBaseFS(), Context.getFiles());
-  DeclScanner Scanner(Target, Filenames, Context);
+  DeclScanner Scanner(Target, Filename.str(), Context);
 
   Tool.run(newFrontendActionFactory(&Scanner.Finder, &Scanner).get());
 }
