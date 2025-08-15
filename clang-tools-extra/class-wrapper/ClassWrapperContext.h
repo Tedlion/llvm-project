@@ -72,13 +72,10 @@ class ClassWrapperContext {
 public:
   ClassWrapperContext(const Twine &SourceRoot, const Twine &TargetRoot,
                       const llvm::FileFilter &SrcFilter,
-                      const llvm::FileFilter &NonWrappedFilter,
-                      IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS,
-                      IntrusiveRefCntPtr<FileManager> Files)
+                      const llvm::FileFilter &NonWrappedFilter)
     : SourceRoot(llvm::pathNormalize(SourceRoot.str())),
       TargetRoot(llvm::pathNormalize(TargetRoot.str())),
-      SrcFilter(SrcFilter), NonWrappedFilter(NonWrappedFilter),
-      BaseFS(std::move(FS)), Files(std::move(Files)) {
+      SrcFilter(SrcFilter), NonWrappedFilter(NonWrappedFilter) {
   }
 
   const std::string SourceRoot;
@@ -137,14 +134,11 @@ public:
     return getTargetPath(Target, RelativePath) + ".dsr";
   }
 
-  StringRef getScanningTarget() const { return ScanningTarget; }
+  // StringRef getScanningTarget() const { return ScanningTarget; }
 
-  void setScanningTarget(StringRef Target) { ScanningTarget = Target; }
+  // void setScanningTarget(StringRef Target) { ScanningTarget = Target; }
 
   //void recordSymbol(const SymbolRecordEntry &Entry);
-
-  IntrusiveRefCntPtr<llvm::vfs::FileSystem> getBaseFS() const { return BaseFS; }
-  IntrusiveRefCntPtr<FileManager> getFiles() const { return Files; }
 
 private:
   StringRef ScanningTarget;
@@ -168,8 +162,6 @@ private:
   Replacements Replaces;
 #endif
 
-  IntrusiveRefCntPtr<llvm::vfs::FileSystem> BaseFS;
-  IntrusiveRefCntPtr<FileManager> Files;
 };
 }; // namespace clang::class_wrapper
 

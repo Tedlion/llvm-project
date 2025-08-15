@@ -154,11 +154,8 @@ int main(int argc, const char **argv) {
         std::min(Parallel.getValue(), std::thread::hardware_concurrency());
   }
 
-  IntrusiveRefCntPtr<vfs::FileSystem> FS = vfs::getRealFileSystem();
-  IntrusiveRefCntPtr<FileManager> Files = new FileManager(FileSystemOptions(), FS);
-
   ClassWrapperContext Context(SourceRoot, OutputDir, SrcFilter,
-                              NonWrappedFilter, FS, Files);
+                              NonWrappedFilter);
 
   parallel::TaskGroup Tasks;
 
@@ -174,7 +171,7 @@ int main(int argc, const char **argv) {
       return 1;
     }
 
-    auto AdjustingCompilations = std::make_unique<
+    auto AdjustingCompilations = std::make_shared<
       ArgumentsAdjustingCompilations>(std::move(Compilations));
 
     for (const auto &Arg : ExtraArgs) {
@@ -184,7 +181,6 @@ int main(int argc, const char **argv) {
 
     AdjustingCompilations->appendArgumentsAdjuster(
         getInsertArgumentAdjuster("-w"));
-
     AdjustingCompilations->appendArgumentsAdjuster(
         getInsertArgumentAdjuster("-Wno-error"));
 
@@ -197,15 +193,13 @@ int main(int argc, const char **argv) {
         llvm::outs() << std::format("  Skip: {}\n", RelativePath);
         continue;
       }
-      llvm::outs() << std::format("  Scan: {}\n", RelativePath);
 
-      Tasks.spawn([&] {
+      Tasks.spawn([Target, Filename, AdjustingCompilations,  &Context] {
         DeclScanner::run(Target, Filename, *AdjustingCompilations, Context);
       });
     }
 
-    Context.setScanningTarget(Target);
-    // runDeclScanner(*Database, ScanningFiles, Context);
+    // Context.setScanningTarget(Target);
     llvm::outs() << "\n";
   }
 
