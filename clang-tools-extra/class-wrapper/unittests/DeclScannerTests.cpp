@@ -10,10 +10,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "GtestSupport.h"
-
 #include "gtest/gtest.h"
 
 #include "DeclScanner.h"
+
 #include "../Support.h"
 
 #include <expected>

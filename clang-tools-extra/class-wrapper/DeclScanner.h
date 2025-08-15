@@ -200,7 +200,7 @@ public:
   void handleNode(const MatchFinder::MatchResult &Result, const NodeType &Node) {
     if (auto Entry = getDeclEntry(Result, Node, *CompilerInstancePtr)) {
       DeclEntries.push_back(std::move(*Entry));
-      postHandleNode(Result, Node, DeclEntries.back());
+      // postHandleNode(Result, Node, DeclEntries.back());
     }
   }
 
@@ -233,7 +233,8 @@ private:
   const ClassWrapperContext &Context;
   std::string Target;
   std::vector<std::string> SourcePaths;
-  MatchFinder Finder;
+  MatchFinder SourceFinder;
+  MatchFinder PreprocessedFinder;
 
   std::string CurrentFilePath;
   std::string RelativeCurrentFilePath; // relative to SourceRoot
@@ -246,8 +247,65 @@ private:
                     const ClassWrapperContext &Context);
 
   MatchHandler<RecordDecl, RecordDeclID> RecordDeclHandler;
+  MatchHandler<TypedefDecl, TypedefDeclID> TypedefDeclHandler;
 
 };
+
+
+class PrintPreprocessedAndDeps : public PreprocessorFrontendAction {
+public:
+  PrintPreprocessedAndDeps(raw_ostream &Dependencies, raw_ostream &Preprocessed)
+    : Dependencies(Dependencies), Preprocessed(Preprocessed) {}
+
+
+  void ExecuteAction() override {
+    assert(!Entered && "ExecuteAction should be called only once");
+    Entered = true;
+
+    CompilerInstance &CI = getCompilerInstance();
+
+    PreprocessorOutputOptions Opts;
+    Opts.ShowCPP = true;
+    Opts.KeepSystemIncludes = true;
+    Opts.ShowLineMarkers = false;
+    Collector->attachToPreprocessor(CI.getPreprocessor());
+
+    DoPrintPreprocessedInput(CI.getPreprocessor(), &Preprocessed, Opts);
+
+    for (const auto &Dep : Collector->getDependencies()) {
+      Dependencies << Dep << "\n";
+    }
+  }
+
+
+  class Factory : public FrontendActionFactory {
+    raw_ostream &Dependencies;
+    raw_ostream &Preprocessed;
+
+  public:
+    Factory(raw_ostream &Dependencies, raw_ostream &Preprocessed)
+      : Dependencies(Dependencies), Preprocessed(Preprocessed) {}
+
+
+    std::unique_ptr<FrontendAction> create() override {
+      return std::make_unique<PrintPreprocessedAndDeps>(
+          Dependencies, Preprocessed);
+    }
+  };
+
+
+  std::unique_ptr<FrontendActionFactory> newFactory() const {
+    return std::make_unique<Factory>(Dependencies, Preprocessed);
+  }
+
+private:
+  std::unique_ptr<DependencyCollector> Collector = std::make_unique<
+    DependencyCollector>();
+  raw_ostream &Dependencies;
+  raw_ostream &Preprocessed;
+  bool Entered = false;
+};
+
 
 } // namespace clang::class_wrapper
 
@@ -260,5 +318,8 @@ public std::formatter<std::string> {
     return std::formatter<std::string>::format(Result, Ctx);
   }
 };
+
+
+
 
 #endif // LLVM_CLANG_TOOLS_EXTRA_CLASS_WRAPPER_DECLSCANNER_H
