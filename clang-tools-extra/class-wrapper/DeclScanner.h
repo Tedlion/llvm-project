@@ -163,27 +163,81 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                       const TypedefDecl &TD,
                                       const CompilerInstance &CI);
 
+void fillDeclEntry(DeclEntry & DE, const MatchFinder::MatchResult &Result,
+                   const RecordDecl &RD, const CompilerInstance *CI);
 
-// extern hash_code getTokenHash
+void fillDeclEntry(DeclEntry & DE, const MatchFinder::MatchResult &Result,
+                   const TypedefDecl &TD, const CompilerInstance *CI);
+
+
+extern const Matcher<Decl> TypedefDeclMatcher;
+extern const Matcher<Decl> RecordDeclMatcher;
+extern const Matcher<Decl> EnumDeclMatcher;
+extern const Matcher<Decl> VarDeclMatcher;
+extern const Matcher<Decl> FunctionDeclMatcher;
+// extern const Matcher<Stmt> DeclStmtMatcher;
+// extern const Matcher<Stmt> DeclRefExprMatcher;
+
+template <typename NodeType>
+constexpr const char *getBindID();
+
+
+template <>
+constexpr const char *getBindID<TypedefDecl>() { return "typedefDecl"; }
+
+
+template <>
+constexpr const char *getBindID<RecordDecl>() { return "recordDecl"; }
+
+
+template <>
+constexpr const char *getBindID<EnumDecl>() { return "enumDecl"; }
+
+
+template <>
+constexpr const char *getBindID<VarDecl>() { return "varDecl"; }
+
+
+template <>
+constexpr const char *getBindID<FunctionDecl>() { return "functionDecl"; }
+
+
+template <typename NodeType>
+const Matcher<Decl> &getMatcher();
+
+
+template <>
+inline const Matcher<Decl> &getMatcher<TypedefDecl>() {
+  return TypedefDeclMatcher;
+}
+
+
+template <>
+inline const Matcher<Decl> &getMatcher<RecordDecl>() {
+  return RecordDeclMatcher;
+}
+
+
+template <>
+inline const Matcher<Decl> &getMatcher<EnumDecl>() {
+  return EnumDeclMatcher;
+}
+
+
+template <>
+inline const Matcher<Decl> &getMatcher<VarDecl>() {
+  return VarDeclMatcher;
+}
+
+
+template <>
+inline const Matcher<Decl> &getMatcher<FunctionDecl>() {
+  return FunctionDeclMatcher;
+}
 
 
 class DeclScanner : public SourceFileCallbacks {
 public:
-  // make the Matchers public for unit tests
-  static constexpr char TypedefDeclID[] = "typedefDecl";
-  static const Matcher<Decl> TypedefDeclMatcher;
-  static constexpr char RecordDeclID[] = "recordDecl";
-  static const Matcher<Decl> RecordDeclMatcher;
-  static constexpr char EnumDeclID[] = "enumDecl";
-  static const Matcher<Decl> EnumDeclMatcher;
-  static constexpr char VarDeclID[] = "varDecl";
-  static const Matcher<Decl> VarDeclMatcher;
-  static constexpr char FunctionDeclID[] = "functionDecl";
-  static const Matcher<Decl> FunctionDeclMatcher;
-  static constexpr char DeclStmtID[] = "declStmt";
-  static const Matcher<Stmt> DeclStmtMatcher;
-  static constexpr char DeclRefExprID[] = "declRefExpr";
-  static const Matcher<Stmt> DeclRefExprMatcher;
 
   static void run(StringRef Target, StringRef Filename,
                   const CompilationDatabase &Compilations,
@@ -196,65 +250,113 @@ public:
   void postHandleNode(const MatchFinder::MatchResult &Result,
                       const RecordDecl &RD, DeclEntry &Entry);
 
+
   template <std::derived_from<Decl> NodeType>
-  void handleNode(const MatchFinder::MatchResult &Result, const NodeType &Node) {
+  void handleNode(const MatchFinder::MatchResult &Result,
+                  const NodeType &Node) {
     if (auto Entry = getDeclEntry(Result, Node, *CompilerInstancePtr)) {
       DeclEntries.push_back(std::move(*Entry));
       // postHandleNode(Result, Node, DeclEntries.back());
     }
   }
 
-  template <typename NodeType, const char * BindID>
-  class MatchHandler : public MatchFinder::MatchCallback {
+
+  template <typename NodeType>
+  class SourceMatchHandler : public MatchFinder::MatchCallback {
     DeclScanner &Scanner;
 
   public:
-    MatchHandler(DeclScanner &Scanner) : Scanner(Scanner) {
-    }
+    SourceMatchHandler(DeclScanner &Scanner) : Scanner(Scanner) {}
 
     void run(const MatchFinder::MatchResult &Result) override {
-      const NodeType *Node = Result.Nodes.getNodeAs<NodeType>(BindID);
+      Scanner.MatchIndex++;
+      const NodeType *Node = Result.Nodes.getNodeAs<NodeType>(getBindID<NodeType>());
       if (!Node) {
-        llvm::errs() << "Failed to get node as " << BindID << "\n";
+        llvm::errs() << "Failed to get node as " << getBindID<NodeType>() << "\n";
         return;
       }
 
       StringRef FileName = Result.SourceManager->getFilename(
           Node->getBeginLoc());
-      if (!Scanner.Context.needToWrap(FileName)) {
+      if (!Scanner.NeedWrapping(FileName)) {
         return;
       }
 
-      Scanner.handleNode(Result, *Node);
+      if (auto Entry =
+          getDeclEntry(Result, *Node, *Scanner.CompilerInstancePtr)) {
+        Scanner.DeclEntries.push_back(std::move(*Entry));
+        Scanner.EntryIndices.push_back(Scanner.MatchIndex);
+      }
     }
   };
 
+
+  template <typename NodeType>
+  class PPMatchHandler : public MatchFinder::MatchCallback {
+    DeclScanner &Scanner;
+
+  public:
+    PPMatchHandler(DeclScanner &Scanner) : Scanner(Scanner) {}
+
+    void run(const MatchFinder::MatchResult &Result) override {
+      Scanner.MatchIndex++;
+      if (Scanner.CurrectEntryIndex >= Scanner.EntryIndices.size())
+        return;
+      if (Scanner.EntryIndices[Scanner.CurrectEntryIndex] != Scanner.MatchIndex)
+        return;
+
+      const NodeType *Node = Result.Nodes.getNodeAs<NodeType>(getBindID<NodeType>());
+      fillDeclEntry(Scanner.DeclEntries[Scanner.MatchIndex], Result, *Node,
+                    Scanner.CompilerInstancePtr);
+    }
+  };
+
+  template<typename NodeType>
+  void enableMatcher() {
+    auto Handler = std::make_unique<SourceMatchHandler<NodeType>>(*this);
+    SourceFinder.addMatcher(getMatcher<NodeType>(), Handler.get());
+    MatchHandlers.push_back(std::move(Handler));
+
+    auto PPHandler = std::make_unique<PPMatchHandler<NodeType>>(*this);
+    PreprocessedFinder.addMatcher(getMatcher<NodeType>(), PPHandler.get());
+    MatchHandlers.push_back(std::move(PPHandler));
+  }
+
+  void enableAllMatchers() {
+    enableMatcher<TypedefDecl>();
+    enableMatcher<RecordDecl>();
+  }
+
 private:
-  const ClassWrapperContext &Context;
+  // const ClassWrapperContext &Context;
   std::string Target;
-  std::vector<std::string> SourcePaths;
+  std::string SourceFile;
+  const std::function<bool(StringRef)> NeedWrapping;
+  unsigned MatchIndex;
+
   MatchFinder SourceFinder;
   MatchFinder PreprocessedFinder;
 
   std::string CurrentFilePath;
-  std::string RelativeCurrentFilePath; // relative to SourceRoot
+  // std::string RelativeCurrentFilePath; // relative to SourceRoot
   std::vector<DeclEntry> DeclEntries;
+  // indices of recorded DeclEntries in first scanning
+  std::vector<unsigned> EntryIndices;
+  unsigned CurrectEntryIndex = 0;
 
   const CompilerInstance * CompilerInstancePtr = nullptr;
   std::unique_ptr<MacroExpansionRecorder> MacroContext;
 
-  DeclScanner(StringRef Target, ArrayRef<std::string> Filename,
-                    const ClassWrapperContext &Context);
+  DeclScanner(StringRef Target, const std::string& SourceFile,
+    const std::function<bool(StringRef)> & NeedWrapping);
 
-  MatchHandler<RecordDecl, RecordDeclID> RecordDeclHandler;
-  MatchHandler<TypedefDecl, TypedefDeclID> TypedefDeclHandler;
-
+  std::vector<std::unique_ptr<MatchFinder::MatchCallback>> MatchHandlers;
 };
 
 
 class PrintPreprocessedAndDeps : public PreprocessorFrontendAction {
 public:
-  PrintPreprocessedAndDeps(raw_ostream &Dependencies, raw_ostream &Preprocessed)
+  PrintPreprocessedAndDeps(raw_ostream &Preprocessed, raw_ostream *Dependencies = nullptr)
     : Dependencies(Dependencies), Preprocessed(Preprocessed) {}
 
 
@@ -268,40 +370,45 @@ public:
     Opts.ShowCPP = true;
     Opts.KeepSystemIncludes = true;
     Opts.ShowLineMarkers = false;
-    Collector->attachToPreprocessor(CI.getPreprocessor());
+
+    if (Dependencies) {
+      Collector = std::make_unique<DependencyCollector>();
+      Collector->attachToPreprocessor(CI.getPreprocessor());
+    }
 
     DoPrintPreprocessedInput(CI.getPreprocessor(), &Preprocessed, Opts);
 
-    for (const auto &Dep : Collector->getDependencies()) {
-      Dependencies << Dep << "\n";
+    if (Dependencies) {
+      for (const auto &Dep : Collector->getDependencies()) {
+        *Dependencies << Dep << "\n";
+      }
     }
   }
 
 
   class Factory : public FrontendActionFactory {
-    raw_ostream &Dependencies;
     raw_ostream &Preprocessed;
+    raw_ostream *Dependencies;
 
   public:
-    Factory(raw_ostream &Dependencies, raw_ostream &Preprocessed)
-      : Dependencies(Dependencies), Preprocessed(Preprocessed) {}
+    Factory(raw_ostream &Preprocessed, raw_ostream *Dependencies = nullptr)
+      : Preprocessed(Preprocessed), Dependencies(Dependencies) {}
 
 
     std::unique_ptr<FrontendAction> create() override {
       return std::make_unique<PrintPreprocessedAndDeps>(
-          Dependencies, Preprocessed);
+          Preprocessed, Dependencies);
     }
   };
 
 
   std::unique_ptr<FrontendActionFactory> newFactory() const {
-    return std::make_unique<Factory>(Dependencies, Preprocessed);
+    return std::make_unique<Factory>(Preprocessed, Dependencies);
   }
 
 private:
-  std::unique_ptr<DependencyCollector> Collector = std::make_unique<
-    DependencyCollector>();
-  raw_ostream &Dependencies;
+  std::unique_ptr<DependencyCollector> Collector;
+  raw_ostream *Dependencies;
   raw_ostream &Preprocessed;
   bool Entered = false;
 };
@@ -311,7 +418,7 @@ private:
 
 template <>
 struct std::formatter<clang::class_wrapper::EditLocation> :
-public std::formatter<std::string> {
+std::formatter<std::string> {
   auto format(const clang::class_wrapper::EditLocation& Loc, std::format_context& Ctx) const {
     std::string Result = std::format("EditKind: {}, Offset: {}",
         static_cast<int>(Loc.getEditKind()), Loc.getOffset());
