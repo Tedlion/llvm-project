@@ -23,22 +23,25 @@
 
 namespace clang::class_wrapper {
 
-const Matcher<Decl> DeclScanner::TypedefDeclMatcher =
-    traverse(TK_IgnoreUnlessSpelledInSource, typedefDecl().bind(TypedefDeclID));
-const Matcher<Decl> DeclScanner::RecordDeclMatcher =
-    traverse(TK_IgnoreUnlessSpelledInSource, recordDecl().bind(RecordDeclID));
-const Matcher<Decl> DeclScanner::EnumDeclMatcher =
-    traverse(TK_IgnoreUnlessSpelledInSource, enumDecl().bind(EnumDeclID));
-const Matcher<Decl> DeclScanner::VarDeclMatcher =
-    traverse(TK_IgnoreUnlessSpelledInSource, varDecl().bind(VarDeclID));
-const Matcher<Decl> DeclScanner::FunctionDeclMatcher =
+const Matcher<Decl> TypedefDeclMatcher =
     traverse(TK_IgnoreUnlessSpelledInSource,
-             functionDecl().bind(FunctionDeclID));
-const Matcher<Stmt> DeclScanner::DeclStmtMatcher =
-    traverse(TK_IgnoreUnlessSpelledInSource, declStmt().bind(DeclStmtID));
-const Matcher<Stmt> DeclScanner::DeclRefExprMatcher =
-    traverse(TK_IgnoreUnlessSpelledInSource, declRefExpr().bind(DeclRefExprID));
-
+             typedefDecl().bind(getBindID<TypedefDecl>()));
+const Matcher<Decl> RecordDeclMatcher =
+    traverse(TK_IgnoreUnlessSpelledInSource,
+             recordDecl().bind(getBindID<RecordDecl>()));
+const Matcher<Decl> EnumDeclMatcher =
+    traverse(TK_IgnoreUnlessSpelledInSource,
+             enumDecl().bind(getBindID<EnumDecl>()));
+const Matcher<Decl> VarDeclMatcher =
+    traverse(TK_IgnoreUnlessSpelledInSource,
+             varDecl().bind(getBindID<VarDecl>()));
+const Matcher<Decl> FunctionDeclMatcher =
+    traverse(TK_IgnoreUnlessSpelledInSource,
+             functionDecl().bind(getBindID<FunctionDecl>()));
+// const Matcher<Stmt> DeclStmtMatcher =
+//     traverse(TK_IgnoreUnlessSpelledInSource, declStmt().bind(DeclStmtID));
+// const Matcher<Stmt> DeclRefExprMatcher =
+//     traverse(TK_IgnoreUnlessSpelledInSource, declRefExpr().bind(DeclRefExprID));
 
 template <typename NodeType>
 concept PrettyDumpNode =
@@ -421,6 +424,13 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
 }
 
 
+void fillDeclEntry(DeclEntry & DE, const MatchFinder::MatchResult &Result,
+                   const RecordDecl &RD, const CompilerInstance *CI) {
+  assert(DE.Name == RD.getName().str());
+}
+
+
+
 #if 0
 static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type* T);
 
@@ -588,30 +598,39 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
 }
 
 
+void fillDeclEntry(DeclEntry &DE, const MatchFinder::MatchResult &Result,
+                   const TypedefDecl &TD, const CompilerInstance *CI) {
+  assert(DE.Name == TD.getName());
+}
+
+
+
+
 void DeclScanner::postHandleNode(const MatchFinder::MatchResult &Result,
                                  const RecordDecl &RD, DeclEntry &Entry) {
 
 }
 
 
-DeclScanner::DeclScanner(StringRef Target, ArrayRef<std::string> Filenames,
-                         const ClassWrapperContext &Context)
-  : Context(Context), Target(Target),
-    SourcePaths(Filenames.begin(), Filenames.end()),
-    RecordDeclHandler(*this), TypedefDeclHandler(*this) {
-  SourceFinder.addMatcher(RecordDeclMatcher, &RecordDeclHandler);
-  SourceFinder.addMatcher(TypedefDeclMatcher, &TypedefDeclHandler);
+DeclScanner::DeclScanner(StringRef Target, const std::string& SourceFile,
+  const std::function<bool(StringRef)> & NeedWrapping)
+  : Target(Target), SourceFile(SourceFile), NeedWrapping(NeedWrapping) {
+
+  // SourceFinder.addMatcher(RecordDeclMatcher, &RecordDeclHandler);
+  // SourceFinder.addMatcher(TypedefDeclMatcher, &TypedefDeclHandler);
 }
 
 
 bool DeclScanner::handleBeginSource(CompilerInstance &CI) {
   CompilerInstancePtr = &CI;
+  MatchIndex = 0;
 
   CurrentFilePath = CI.getSourceManager().getFileEntryForID(
       CI.getSourceManager().getMainFileID())->tryGetRealPathName();
-  using namespace std::filesystem;
-  RelativeCurrentFilePath = relative(path(CurrentFilePath),
-                                     path(Context.SourceRoot)).generic_string();
+
+  // using namespace std::filesystem;
+  // RelativeCurrentFilePath = relative(path(CurrentFilePath),
+  //                                    path(Context.SourceRoot)).generic_string();
   // MacroContext = std::make_unique<MacroExpansionRecorder>(CI.getLangOpts());
   // MacroContext->registerForPreprocessor(CI.getPreprocessor());
   return true;
@@ -651,7 +670,7 @@ static bool generatePreprocessed(const CompilationDatabase &Compilations,
     return false;
   }
 
-  PrintPreprocessedAndDeps PDAction(DependencyFile, PreprocessedFile);
+  PrintPreprocessedAndDeps PDAction(PreprocessedFile, &DependencyFile);
   ClangTool PDTool(Compilations, Filename.str(),
                    std::make_shared<PCHContainerOperations>(), FS);
   PDTool.run(PDAction.newFactory().get());
@@ -675,7 +694,23 @@ FixedCompilationDatabase getPreprocessedCompilations(
     }
   }
 
+  Command.CommandLine.push_back("-x");
+  Command.CommandLine.push_back("c");
+
   return FixedCompilationDatabase(Command.Directory, Command.CommandLine);
+}
+
+
+void scanDecls(StringRef Target, StringRef Filename,
+               const CompilationDatabase &Compilations,
+               const ClassWrapperContext &Context) {
+  std::string RelativePath = Context.getRelativePath(Filename);
+  std::string DependencyPath = Context.getDependencyPath(Target, RelativePath);
+  std::string PreprocessedPath = Context.getPreprocessedPath(
+      Target, RelativePath);
+  std::string ScanResultPath = Context.getScanResultPath(Target, RelativePath);
+
+  IntrusiveRefCntPtr<vfs::FileSystem> FS = vfs::createPhysicalFileSystem();
 }
 
 
@@ -697,7 +732,9 @@ void DeclScanner::run(StringRef Target, StringRef Filename,
 
   ClangTool SourceTool(Compilations, Filename.str(),
                  std::make_shared<PCHContainerOperations>(), FS);
-  DeclScanner Scanner(Target, Filename.str(), Context);
+  DeclScanner Scanner(Target, Filename.str(),
+    std::bind_front(&ClassWrapperContext::needToWrap, &Context));
+  Scanner.enableAllMatchers();
 
   SourceTool.run(newFrontendActionFactory(&Scanner.SourceFinder, &Scanner).get());
 
@@ -709,7 +746,9 @@ void DeclScanner::run(StringRef Target, StringRef Filename,
   PPTool.run(newFrontendActionFactory(&Scanner.PreprocessedFinder,
                                  &Scanner).get());
 
-  std::println("scan {} {}", Target, Filename.str());
+  std::println("scan {} {}, MatchedDecls:{}, RecordDecls:{}",
+               Target, Filename.str(), Scanner.MatchIndex,
+               Scanner.DeclEntries.size());
 }
 
 } // namespace clang::class_wrapper
