@@ -179,7 +179,7 @@ extern const Matcher<Decl> FunctionDeclMatcher;
 // extern const Matcher<Stmt> DeclRefExprMatcher;
 
 template <typename NodeType>
-constexpr const char *getBindID();
+constexpr const char *getBindID() = delete;
 
 
 template <>
@@ -238,6 +238,10 @@ inline const Matcher<Decl> &getMatcher<FunctionDecl>() {
 
 class DeclScanner : public SourceFileCallbacks {
 public:
+  DeclScanner() :NeedWrapping([](StringRef) { return true; }) { }
+
+  DeclScanner(StringRef Target, const std::string& SourceFile,
+    const std::function<bool(StringRef)> & );
 
   static void run(StringRef Target, StringRef Filename,
                   const CompilationDatabase &Compilations,
@@ -327,12 +331,24 @@ public:
     enableMatcher<RecordDecl>();
   }
 
+  [[nodiscard]] const std::vector<DeclEntry> &getDeclEntries() const {
+    return DeclEntries;
+  }
+
+  MatchFinder &getSourceFinder() {
+    return SourceFinder;
+  }
+
+  MatchFinder &getPreprocessedFinder() {
+    return PreprocessedFinder;
+  }
+
 private:
   // const ClassWrapperContext &Context;
   std::string Target;
   std::string SourceFile;
   const std::function<bool(StringRef)> NeedWrapping;
-  unsigned MatchIndex;
+  unsigned MatchIndex = 0;
 
   MatchFinder SourceFinder;
   MatchFinder PreprocessedFinder;
@@ -347,9 +363,6 @@ private:
   const CompilerInstance * CompilerInstancePtr = nullptr;
   std::unique_ptr<MacroExpansionRecorder> MacroContext;
 
-  DeclScanner(StringRef Target, const std::string& SourceFile,
-    const std::function<bool(StringRef)> & NeedWrapping);
-
   std::vector<std::unique_ptr<MatchFinder::MatchCallback>> MatchHandlers;
 };
 
@@ -358,7 +371,6 @@ class PrintPreprocessedAndDeps : public PreprocessorFrontendAction {
 public:
   PrintPreprocessedAndDeps(raw_ostream &Preprocessed, raw_ostream *Dependencies = nullptr)
     : Dependencies(Dependencies), Preprocessed(Preprocessed) {}
-
 
   void ExecuteAction() override {
     assert(!Entered && "ExecuteAction should be called only once");
@@ -391,7 +403,7 @@ public:
     raw_ostream *Dependencies;
 
   public:
-    Factory(raw_ostream &Preprocessed, raw_ostream *Dependencies = nullptr)
+    explicit Factory(raw_ostream &Preprocessed, raw_ostream *Dependencies = nullptr)
       : Preprocessed(Preprocessed), Dependencies(Dependencies) {}
 
 

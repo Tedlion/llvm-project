@@ -9,17 +9,15 @@
 
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/FrontendActions.h"
-#include "clang/Frontend/PreprocessorOutputOptions.h"
 #include "clang/Lex/Lexer.h"
 #include "clang/Tooling/Tooling.h"
 #include "clang/Tooling/Transformer/SourceCode.h"
 
 #include <filesystem>
-#include <fstream>
 #include <print>
 
 #define DEBUG_TYPE "class-wrapper-decl-scanner"
-#define LLVM_DEBUG(x) x
+// #define LLVM_DEBUG(x) x
 
 namespace clang::class_wrapper {
 

@@ -5,7 +5,13 @@ set(LLVM_LINK_COMPONENTS
         FrontendOpenMP
 )
 
-#add_definitions(-D_SILENCE_CXX23_ALIGNED_STORAGE_DEPRECATION_WARNING)
+add_definitions(-D_SILENCE_CXX23_ALIGNED_UNION_DEPRECATION_WARNING)
+
+if (MSVC)
+    add_compile_options(/Od /Zi)
+else ()
+    add_compile_options(-O0 -g)
+endif ()
 
 add_clang_library(classWrapper
         DeclScanner.cpp
@@ -14,15 +20,6 @@ add_clang_library(classWrapper
         MacroExpansionRecorder.cpp
         Support.cpp
 )
-
-target_compile_definitions(classWrapper PRIVATE _SILENCE_CXX23_ALIGNED_UNION_DEPRECATION_WARNING)
-
-if(MSVC)
-    target_compile_options(classWrapper PRIVATE /Od /Zi)
-else()
-    target_compile_options(classWrapper PRIVATE -O0 -g)
-endif()
-
 
 clang_target_link_libraries(classWrapper
         PRIVATE

@@ -16,7 +16,6 @@
 
 #include "../Support.h"
 
-#include <expected>
 #include <ranges>
 #include <source_location>
 
@@ -24,72 +23,60 @@ using namespace clang;
 using namespace clang::ast_matchers;
 
 namespace clang::class_wrapper {
-class MatcherTest : public ::testing::Test, SourceFileCallbacks {
-  template <std::derived_from<Decl> DeclNode, const char * BindID>
-  class MatcherCallback : public MatchFinder::MatchCallback {
-    MatcherTest &Test;
-
-  public:
-    MatcherCallback(MatcherTest &Test) : Test(Test) {
-    }
-
-    void run(const MatchFinder::MatchResult &Result) override {
-      const auto *Node = Result.Nodes.getNodeAs<DeclNode>(BindID);
-      if (!Node) {
-        return;
-      }
-
-      if (auto Entry = getDeclEntry(Result, *Node, *Test.CI)) {
-        Test.DeclEntries.push_back(*Entry);
-      }
-    }
-  };
-
-  MatchFinder Finder;
-  std::vector<DeclEntry> DeclEntries;
+class MatcherTest : public ::testing::Test {
+  DeclScanner Scanner;
   std::string ErrorMessage;
-  MatcherCallback<RecordDecl, DeclScanner::RecordDeclID> RecordDeclHandler;
-  MatcherCallback<TypedefDecl, DeclScanner::TypedefDeclID> TypedefDeclHandler;
-  const CompilerInstance *CI = nullptr;
-  std::unique_ptr<MacroExpansionRecorder> MacroRecorder;
-
-  bool handleBeginSource(CompilerInstance &CI) override {
-    this->CI = &CI;
-    // MacroRecorder = std::make_unique<MacroExpansionRecorder>(CI.getLangOpts());
-    // MacroRecorder->registerForPreprocessor(CI.getPreprocessor());
-    return true;
-  }
 
 protected:
-  MatcherTest() : RecordDeclHandler(*this), TypedefDeclHandler(*this) {
-  }
-
   template <typename T>
-  void enableMatcher();
-
+  void enableMatcher() {
+    Scanner.enableMatcher<T>();
+  }
 
   bool scanOnCode(StringRef Code, StringRef Filename = "input.c",
                   std::vector<std::string> CompileArgs = {}) {
+    std::string PreProcessed;
+    raw_string_ostream OS(PreProcessed);
+    auto PDAction = PrintPreprocessedAndDeps(OS);
+    if (!runToolOnCodeWithArgs(PDAction.newFactory()->create(),
+                               Code, CompileArgs, Filename)) {
+      ErrorMessage = "PDAction failed\n";
+      return false;
+    }
 
-    std::unique_ptr<FrontendActionFactory> Factory(
-        newFrontendActionFactory(&Finder, this));
     if (llvm::find(CompileArgs, "-target") == CompileArgs.end()) {
       CompileArgs.push_back("-target");
       CompileArgs.push_back("i386-unknown-unknown");
     }
     CompileArgs.push_back("-fparse-all-comments");
 
-    if (!runToolOnCodeWithArgs(Factory->create(),
+    std::unique_ptr<FrontendActionFactory> SourceFactory(
+        newFrontendActionFactory(&Scanner.getSourceFinder(), &Scanner));
+
+    if (!runToolOnCodeWithArgs(SourceFactory->create(),
                                Code, CompileArgs, Filename)) {
       ErrorMessage = std::format("Parsing error in \"{}\"", Code);
       return false;
     }
+
+    CompileArgs.push_back("-x");
+    CompileArgs.push_back("c");
+
+    std::unique_ptr<FrontendActionFactory> PPFactory(
+        newFrontendActionFactory(&Scanner.getPreprocessedFinder(), &Scanner));
+
+    if (!runToolOnCodeWithArgs(PPFactory->create(),
+                               PreProcessed, CompileArgs, Filename + ".i")) {
+      ErrorMessage = std::format("Parsing error in \"{}\"", PreProcessed);
+      return false;
+    }
+
     return true;
   }
 
 
   [[nodiscard]] const std::vector<DeclEntry> &getResult() const {
-    return DeclEntries;
+    return Scanner.getDeclEntries();
   }
 
 
@@ -148,19 +135,6 @@ static hash_code getHashForStringList(ArrayRef<StringRef> Strings) {
 }
 
 
-template <>
-void MatcherTest::enableMatcher<RecordDecl>() {
-  Finder.addMatcher(
-      DeclScanner::RecordDeclMatcher, &RecordDeclHandler);
-}
-
-
-template <>
-void MatcherTest::enableMatcher<TypedefDecl>() {
-  Finder.addMatcher(DeclScanner::TypedefDeclMatcher, &TypedefDeclHandler);
-}
-
-
 using std::source_location;
 
 
@@ -171,7 +145,7 @@ static std::string getLocationStr(
 
 
 static void checkTypeRef(
-    const DeclEntry::MapType Map, ArrayRef<StringRef> Expected,
+    const DeclEntry::MapType &Map, ArrayRef<StringRef> Expected,
     const source_location &Location = source_location::current()) {
   std::string LocationStr = getLocationStr(Location);
   ASSERT_EQ(Map.size(), Expected.size()) << LocationStr;
