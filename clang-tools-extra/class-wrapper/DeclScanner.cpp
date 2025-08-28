@@ -19,6 +19,10 @@
 #define DEBUG_TYPE "class-wrapper-decl-scanner"
 // #define LLVM_DEBUG(x) x
 
+#ifdef NDEBUG
+#error "suppose build with debug"
+#endif
+
 namespace clang::class_wrapper {
 
 const Matcher<Decl> TypedefDeclMatcher =
@@ -49,6 +53,19 @@ concept PrettyDumpNode =
     };
 
 
+decltype(DeclScanner::PPTokens)::const_iterator
+DeclScanner::findTokenAt(SourceLocation Loc) const {
+  auto it = std::lower_bound(
+      PPTokens.begin(), PPTokens.end(), Loc,
+      [](const auto& pair, const SourceLocation& target) {
+        return pair.first < target;
+      });
+
+  assert(it != PPTokens.end() && it->first == Loc);
+  return it;
+}
+
+
 static Range getRangeFromAssociated(const CharSourceRange &CSR,
                               const SourceManager &SM) {
   unsigned Begin = SM.getFileOffset(CSR.getBegin());
@@ -59,38 +76,22 @@ static Range getRangeFromAssociated(const CharSourceRange &CSR,
 
 // Ignoring spaces, newlines, comments, and tabs when getting the Hash
 // Attention: cannot handle macro expansion
-static hash_code getTokenHash(SourceLocation Begin, SourceLocation End,
-                              const SourceManager &SM,
-                              const CompilerInstance &CI) {
+hash_code DeclScanner::getTokenHash(SourceRange SR) const {
   hash_code Hash(0);
-  Token Tok;
-  Preprocessor &PP = CI.getPreprocessor();
+  const Preprocessor &PP = CI->getPreprocessor();
+  const SourceManager &SM = PP.getSourceManager();
 
-  // FIXME: Calculate the hash of the preprocessed result
-  //  The current implementation fails when the Begin is not unique
-  // llvm::errs() << "Begin: " << Begin.printToString(SM) << "\n";
-  assert(Begin.isFileID());
+  auto It = findTokenAt(SR.getBegin());
 
-  // FIXME: now always from the start
-  PP.EnterSourceFile(SM.getFileID(Begin), nullptr, Begin);
-
-  bool BeginFound = false;
   while (true) {
-    PP.Lex(Tok);
-    if (Tok.is(tok::eof))
-      break;
-    SourceLocation TokLoc = Tok.getLocation();
-    if (TokLoc == Begin)
-      BeginFound = true;
-    if (!BeginFound)
-      continue;
-
+    const auto &[Loc, Tok] = *It;
     std::string TokSpelling = PP.getSpelling(Tok);
     // llvm::errs() << "Hash token: '" << TokSpelling << "' at "
-    //     << TokLoc.printToString(SM) << " " << TokLoc.getRawEncoding() << "\n";
+    // << Loc.printToString(SM) << " " << Loc.getRawEncoding() << "\n";
     Hash = hash_combine(Hash, TokSpelling);
-    if (TokLoc == End)
+    if (Loc == SR.getEnd())
       break;
+    ++It;
   }
 
   // llvm::errs() << "Hash:" << hash_value(Hash) << "\n";
@@ -183,8 +184,7 @@ expandOnLocations(const SmallSet<SourceLocation, 3> &ExpansionLocs,
 #endif
 
 
-static CharSourceRange getFullRange(SourceRange SR,
-                                    const SourceManager &SM,
+static CharSourceRange getFullRange(SourceRange SR, const SourceManager &SM,
                                     const LangOptions &LangOpts) {
   // llvm::errs() << "SourceRange: " << SR.printToString(SM) << "\n";
   CharSourceRange Range = CharSourceRange::getCharRange(SR);
@@ -358,9 +358,8 @@ private:
 
 
 
-std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
-                                      const RecordDecl &RD,
-                                      const CompilerInstance &CI) {
+std::optional<DeclEntry> DeclScanner::getDeclEntry(
+    const MatchFinder::MatchResult &Result, const RecordDecl &RD) {
   // FIXME: Not all RecordDecl in local scope can be ignored,  for a local
   //  RecordDecl with function pointer field, an edition of transferring it to
   //  member function pointer is required.
@@ -383,50 +382,53 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
 
   // RD.dump();
   SourceRange SR = RD.getSourceRange();
-  SourceLocation SBegin = SR.getBegin();
-  SourceLocation SEnd = SR.getEnd();
-
   // SR.print(llvm::errs(), SM);
   // llvm::errs() << "\n";
 
   DE.Name = RD.getName().str();
   DE.IsUnnamed = DE.Name.empty();
-  DE.FilePath = SM.getFilename(RD.getBeginLoc()).str();
+  FileID FID = SM.getFileID(RD.getBeginLoc());
+  const FileEntry *Entry = SM.getFileEntryForID(FID);
+  DE.SourcePath = Entry->tryGetRealPathName().str();
+
   DE.Kind = RD.getKind();
   DE.RecordID = &RD;
   DE.IsUnion = RD.isUnion();
   DE.IsDefinition = RD.isCompleteDefinition();
   CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
 
-  if (SBegin.isMacroID() || SEnd.isMacroID()) {
-    if (AssociatedRange.isInvalid())
-      AssociatedRange = getFullRange(SR, SM, CI.getLangOpts());
-    DE.ExpansionReplaced = getRangeFromAssociated(AssociatedRange, SM);
-    DE.NeedExpansion = true;
-    return DE;
-  }
+  // if (SBegin.isMacroID() || SEnd.isMacroID())
+  if (AssociatedRange.isInvalid())
+    AssociatedRange = getFullRange(SR, SM, CI->getLangOpts());
 
-  DE.FullRange = getRangeFromAssociated(AssociatedRange, SM);
-
-  if (!DE.IsDefinition)
-    return DE;
-
-  DE.ImplHash = getTokenHash(SBegin, SEnd, SM, CI);
-  TypeDependencyVisitor::scanOn(
-      RD,
-      [&DE](const std::string &Name, const RefEntry &Ref) {
-        DE.ImplRefs.try_emplace(Name, Ref);
-      });
+  DE.ToRemove = getRangeFromAssociated(AssociatedRange, SM);
+  if (DE.IsDefinition)
+    TypeDependencyVisitor::scanOn(
+        RD, [&DE](const std::string &Name, const RefEntry &Ref) {
+          DE.ImplRefs.try_emplace(Name, Ref);
+        });
 
   return DE;
 }
 
 
-void fillDeclEntry(DeclEntry & DE, const MatchFinder::MatchResult &Result,
-                   const RecordDecl &RD, const CompilerInstance *CI) {
+void DeclScanner::fillDeclEntry(DeclEntry &DE,
+                                const MatchFinder::MatchResult &Result,
+                                const RecordDecl &RD) {
   assert(DE.Name == RD.getName().str());
-}
 
+  if (!DE.IsDefinition)
+    return;
+
+  const SourceManager &SM = *Result.SourceManager;
+  SourceRange SR = RD.getSourceRange();
+  // SourceLocation SBegin = SR.getBegin();
+  // SourceLocation SEnd = SR.getEnd();
+
+  CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
+  DE.AddToClass = getRangeFromAssociated(AssociatedRange, SM);
+  DE.ImplHash = getTokenHash(SR);
+}
 
 
 #if 0
@@ -535,9 +537,8 @@ static QualType removeArray(QualType QT) {
 }
 
 
-std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
-                                      const TypedefDecl &TD,
-                                      const CompilerInstance &CI) {
+std::optional<DeclEntry> DeclScanner::getDeclEntry(
+    const MatchFinder::MatchResult &Result, const TypedefDecl &TD) {
   // FIXME: Not all TypedefDecls in local scope can be ignored,  for a local
   //  typedef on function pointer, an edition of transferring it to member
   //  function pointer is required.
@@ -552,28 +553,48 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
 
   DeclEntry DE;
   DE.Name = TD.getName();
-  DE.FilePath = SM.getFilename(TD.getBeginLoc()).str();
+  FileID FID = SM.getFileID(TD.getBeginLoc());
+  const FileEntry *Entry = SM.getFileEntryForID(FID);
+  DE.SourcePath = Entry->tryGetRealPathName().str();  DE.Kind = TD.getKind();
   DE.Kind = TD.getKind();
 
+  // Sometimes a RecordDecl is wrapped in a TypedefDecl,
+  // we check that with Range and the RecordID.
   QualType UnderlyingType = TD.getUnderlyingType();
-
   QualType RemoveArrayType = removeArray(UnderlyingType);
   if (const ElaboratedType * ET = dyn_cast<ElaboratedType>(RemoveArrayType.getTypePtr()))
     if (const RecordType * RT = dyn_cast<RecordType>(ET->getNamedType().getTypePtr()))
       DE.RecordID = RT->getDecl();
 
-  DE.Expansion = UnderlyingType.getAsString();
-  findClassnameInsertions(DE.Expansion, DE.EditLocations);
+  CharSourceRange AssociatedRange = getAssociatedRange(TD, *Result.Context);
+  if (AssociatedRange.isInvalid())
+    AssociatedRange = getFullRange(TD.getSourceRange(), SM, CI->getLangOpts());
+  DE.ToRemove = getRangeFromAssociated(AssociatedRange, SM);
+  return DE;
+}
+
+
+void DeclScanner::fillDeclEntry(
+    DeclEntry &DE, const MatchFinder::MatchResult &Result,
+    const TypedefDecl &TD) {
+  assert(DE.Name == TD.getName());
+
+  const SourceManager &SM = *Result.SourceManager;
+  QualType UnderlyingType = TD.getUnderlyingType();
+  CharSourceRange AssociatedRange = getAssociatedRange(TD, *Result.Context);
+
+  std::string Expansion = UnderlyingType.getAsString();
+  findClassnameInsertions(Expansion, DE.EditLocations);
 
   // FunctionPtr or FunctionPtr Array
   bool WithFunctionPtr = !DE.EditLocations.empty();
 
   if (isa<ArrayType>(UnderlyingType.getTypePtr())) {
     DE.IsArray = true;
-    DE.EditLocations.emplace_back(findArrayNameInsertion(DE.Expansion));
+    DE.EditLocations.emplace_back(findArrayNameInsertion(Expansion));
   } else if (WithFunctionPtr) {
     DE.IsFunctionPtr = true;
-    DE.EditLocations.emplace_back(findFunctionPtrNameInsertion(DE.Expansion));
+    DE.EditLocations.emplace_back(findFunctionPtrNameInsertion(Expansion));
   }
 
   TypeDependencyVisitor::scanOn(
@@ -585,23 +606,12 @@ std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
 
   // The FullRange is the range to remove the typedef from the original source
   // Generating new does not rely on the old source.
-  SourceRange SR = TD.getSourceRange();
-  CharSourceRange AssociatedRange = getAssociatedRange(TD, *Result.Context);
-  if (AssociatedRange.isInvalid())
-    AssociatedRange = getFullRange(SR, SM, CI.getLangOpts());
-  DE.FullRange = getRangeFromAssociated(AssociatedRange, SM);
+
+
+  // DE.FullRange = getRangeFromAssociated(AssociatedRange, SM);
 
   llvm::sort(DE.EditLocations);
-  return DE;
 }
-
-
-void fillDeclEntry(DeclEntry &DE, const MatchFinder::MatchResult &Result,
-                   const TypedefDecl &TD, const CompilerInstance *CI) {
-  assert(DE.Name == TD.getName());
-}
-
-
 
 
 void DeclScanner::postHandleNode(const MatchFinder::MatchResult &Result,
@@ -619,12 +629,30 @@ DeclScanner::DeclScanner(StringRef Target, const std::string& SourceFile,
 }
 
 
-bool DeclScanner::handleBeginSource(CompilerInstance &CI) {
-  CompilerInstancePtr = &CI;
+bool DeclScanner::handleBeginSource(CompilerInstance &Compiler) {
+  CI = &Compiler;
   MatchIndex = 0;
 
-  CurrentFilePath = CI.getSourceManager().getFileEntryForID(
-      CI.getSourceManager().getMainFileID())->tryGetRealPathName();
+  const SourceManager &SM = Compiler.getSourceManager();
+  CurrentFile = SM.getMainFileID();
+  StringRef FileName = SM.getFilename(SM.getLocForStartOfFile(CurrentFile));
+
+  if (FileName.ends_with(".i")) {
+    Preprocessor & PP = Compiler.getPreprocessor();
+    PP.setTokenWatcher([this](const Token &Tok) {
+      SourceLocation Loc = Tok.getLocation();
+      FileID FID = CI->getSourceManager().getFileID(Loc);
+
+      if (CurrentFile != FID)
+        return;
+
+      if (!PPTokens.empty()) {
+        assert(PPTokens.back().first < Loc);
+      }
+
+      PPTokens.emplace_back(Loc, Tok);
+    });
+  }
 
   // using namespace std::filesystem;
   // RelativeCurrentFilePath = relative(path(CurrentFilePath),
@@ -729,20 +757,22 @@ void DeclScanner::run(StringRef Target, StringRef Filename,
   }
 
   ClangTool SourceTool(Compilations, Filename.str(),
-                 std::make_shared<PCHContainerOperations>(), FS);
+                       std::make_shared<PCHContainerOperations>(), FS);
   DeclScanner Scanner(Target, Filename.str(),
-    std::bind_front(&ClassWrapperContext::needToWrap, &Context));
+                      std::bind_front(&ClassWrapperContext::needToWrap,
+                                      &Context));
   Scanner.enableAllMatchers();
 
-  SourceTool.run(newFrontendActionFactory(&Scanner.SourceFinder, &Scanner).get());
+  SourceTool.run(
+    newFrontendActionFactory(&Scanner.SourceFinder, &Scanner).get());
 
   FixedCompilationDatabase PPCompilations =
       getPreprocessedCompilations(Compilations, Filename, PreprocessedPath);
 
   ClangTool PPTool(PPCompilations, PreprocessedPath,
-                 std::make_shared<PCHContainerOperations>(), FS);
-  PPTool.run(newFrontendActionFactory(&Scanner.PreprocessedFinder,
-                                 &Scanner).get());
+                   std::make_shared<PCHContainerOperations>(), FS);
+  PPTool.run(
+      newFrontendActionFactory(&Scanner.PreprocessedFinder, &Scanner).get());
 
   std::println("scan {} {}, MatchedDecls:{}, RecordDecls:{}",
                Target, Filename.str(), Scanner.MatchIndex,

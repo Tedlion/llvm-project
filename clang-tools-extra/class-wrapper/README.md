@@ -191,7 +191,7 @@ We judge two symbols are consistent if and only if the following two conditions 
 | InfHash    | -       | -      | -     | -       | PP               | PP               |
 | ImplHash   | PP      | PP     | PP    | PP      | PP (for def)     | PP (for def)     |
 | ToRemove   | Y       | Y      | Y     | Y       | Y                | N (except macro) |
-| AddToClass | Y       | Y      | Y     | Y       | Y (include body) | N (except body)  |   
+| AddToClass | Y       | Y      | Y     | Y       | Y (include body) | N (except body)  |
 
 ## TODO Lists:
 - [x] Accept multiple compilation database argument in command line

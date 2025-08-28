@@ -23,9 +23,53 @@ using namespace clang;
 using namespace clang::ast_matchers;
 
 namespace clang::class_wrapper {
+
+
+static testing::AssertionResult
+verifyRangeMatched(StringRef Source, Range CharRange, StringRef Expected) {
+  if (CharRange.getOffset() + CharRange.getLength() > Source.size())
+    return testing::AssertionFailure()
+           << "Invalid range: " << CharRange.getOffset() << " + "
+           << CharRange.getLength() << " > " << Source.size();
+  StringRef MatchedText =
+      Source.substr(CharRange.getOffset(), CharRange.getLength());
+  if (MatchedText != Expected)
+    return testing::AssertionFailure()
+           << "got unexpected matched text:\n \"" << MatchedText << "\"";
+  return testing::AssertionSuccess();
+}
+
+
+static testing::AssertionResult
+verifyRangeMatched(StringRef Source, Range CharRange,
+                   StringRef ExpectedBegin, StringRef ExpectedEnd) {
+  if (CharRange.getOffset() + CharRange.getLength() > Source.size())
+    return testing::AssertionFailure()
+           << "Invalid range: " << CharRange.getOffset() << " + "
+           << CharRange.getLength() << " > " << Source.size();
+  if (CharRange.getLength() < ExpectedBegin.size() ||
+      CharRange.getLength() < ExpectedEnd.size()) {
+    return testing::AssertionFailure() << "Matched text too short";
+      }
+
+  StringRef MatchedText =
+      Source.substr(CharRange.getOffset(), CharRange.getLength());
+
+  if (!MatchedText.starts_with(ExpectedBegin) ||
+      !MatchedText.ends_with(ExpectedEnd)) {
+    return testing::AssertionFailure()
+           << "got unexpected matched text:\n \"" << MatchedText << "\"";
+      }
+  return testing::AssertionSuccess();
+}
+
+
+
 class MatcherTest : public ::testing::Test {
   DeclScanner Scanner;
   std::string ErrorMessage;
+  StringRef SourceCode;
+  std::string PreProcessed;
 
 protected:
   template <typename T>
@@ -35,7 +79,7 @@ protected:
 
   bool scanOnCode(StringRef Code, StringRef Filename = "input.c",
                   std::vector<std::string> CompileArgs = {}) {
-    std::string PreProcessed;
+    SourceCode = Code;
     raw_string_ostream OS(PreProcessed);
     auto PDAction = PrintPreprocessedAndDeps(OS);
     if (!runToolOnCodeWithArgs(PDAction.newFactory()->create(),
@@ -84,46 +128,30 @@ protected:
     return ErrorMessage;
   }
 
+
+  void checkToRemove(const DeclEntry &DE, StringRef Expected) const {
+    EXPECT_TRUE(verifyRangeMatched(SourceCode, DE.ToRemove, Expected));
+  }
+
+
+  void checkToRemove(const DeclEntry &DE, StringRef ExpectedBegin,
+                     StringRef ExpectedEnd) const {
+    EXPECT_TRUE(verifyRangeMatched(SourceCode, DE.ToRemove,
+      ExpectedBegin, ExpectedEnd));
+  }
+
+
+  void checkAddToClass(const DeclEntry &DE, StringRef Expected) const {
+    EXPECT_TRUE(verifyRangeMatched(PreProcessed, DE.AddToClass, Expected));
+  }
+
+
+  void checkAddToClass(const DeclEntry &DE, StringRef ExpectedBegin,
+                       StringRef ExpectedEnd) const {
+    EXPECT_TRUE(verifyRangeMatched(PreProcessed, DE.AddToClass,
+      ExpectedBegin, ExpectedEnd));
+  }
 };
-
-
-static testing::AssertionResult
-verifyRangeMatched(StringRef Source, Range CharRange, StringRef Expected) {
-  if (CharRange.getOffset() + CharRange.getLength() > Source.size())
-    return testing::AssertionFailure()
-           << "Invalid range: " << CharRange.getOffset() << " + "
-           << CharRange.getLength() << " > " << Source.size();
-  StringRef MatchedText =
-      Source.substr(CharRange.getOffset(), CharRange.getLength());
-  if (MatchedText != Expected)
-    return testing::AssertionFailure()
-           << "got unexpected matched text:\n \"" << MatchedText << "\"";
-  return testing::AssertionSuccess();
-}
-
-
-static testing::AssertionResult
-verifyRangeMatched(StringRef Source, Range CharRange,
-                   StringRef ExpectedBegin, StringRef ExpectedEnd) {
-  if (CharRange.getOffset() + CharRange.getLength() > Source.size())
-    return testing::AssertionFailure()
-           << "Invalid range: " << CharRange.getOffset() << " + "
-           << CharRange.getLength() << " > " << Source.size();
-  if (CharRange.getLength() < ExpectedBegin.size() ||
-      CharRange.getLength() < ExpectedEnd.size()) {
-    return testing::AssertionFailure() << "Matched text too short";
-  }
-
-  StringRef MatchedText =
-      Source.substr(CharRange.getOffset(), CharRange.getLength());
-
-  if (!MatchedText.starts_with(ExpectedBegin) ||
-      !MatchedText.ends_with(ExpectedEnd)) {
-    return testing::AssertionFailure()
-           << "got unexpected matched text:\n \"" << MatchedText << "\"";
-  }
-  return testing::AssertionSuccess();
-}
 
 
 static hash_code getHashForStringList(ArrayRef<StringRef> Strings) {
@@ -189,32 +217,28 @@ TEST_F(MatcherTest, SimpleTypedef) {
 
   EXPECT_EQ(D1.Name, "int_t");
   EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D1.Expansion, "int");
-  EXPECT_TRUE(verifyRangeMatched(SimpleTypedef, D1.FullRange,
-    "typedef int int_t;\n"));
+  checkToRemove(D1, "typedef int int_t;\n");
+  checkAddToClass(D1, "typedef int int_t;\n");
   checkTypeRef(D1.ImplRefs, {});
 
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "short_pt");
   EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D2.Expansion, "short *");
-  EXPECT_TRUE(verifyRangeMatched(SimpleTypedef, D2.FullRange,
-    "typedef short * short_pt;\n"));
+  checkToRemove(D2, "typedef short * short_pt;\n");
+  checkAddToClass(D2, "typedef short * short_pt;\n");
   checkTypeRef(D2.ImplRefs, {});
 
   const auto &D3 = getResult()[2];
   EXPECT_EQ(D3.Name, "char_p2t");
   EXPECT_EQ(D3.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D3.Expansion, "char **");
-  EXPECT_TRUE(verifyRangeMatched(SimpleTypedef, D3.FullRange,
-    "typedef char ** char_p2t;\n"));
+  checkToRemove(D3, "typedef char ** char_p2t;\n");
+  checkAddToClass(D3, "typedef char ** char_p2t;\n");
   checkTypeRef(D3.ImplRefs, {});
 
   const auto &D4 = getResult()[3];
   EXPECT_EQ(D4.Name, "ull_pt");
-  EXPECT_EQ(D4.Expansion, "volatile unsigned long long *const");
-  EXPECT_TRUE(verifyRangeMatched(SimpleTypedef, D4.FullRange,
-    "typedef volatile unsigned long long * const ull_pt;\n"));
+  checkToRemove(D4, "typedef volatile unsigned long long * const ull_pt;\n");
+  checkAddToClass(D4, "typedef volatile unsigned long long * const ull_pt;\n");
   checkTypeRef(D4.ImplRefs, {});
 }
 
@@ -236,33 +260,29 @@ TEST_F(MatcherTest, TypedefOnCustomType) {
   const auto &D1 = getResult()[0];
   EXPECT_EQ(D1.Name, "foo_t");
   EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D1.Expansion, "int");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnCustomType, D1.FullRange,
-    "typedef int foo_t;\n"));
+  checkToRemove(D1, "typedef int foo_t;\n");
+  checkAddToClass(D1, "typedef int foo_t;\n");
   checkTypeRef(D1.ImplRefs, {});
 
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "bar_t");
   EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D2.Expansion, "foo_t");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnCustomType, D2.FullRange,
-    "typedef foo_t bar_t;\n"));
+  checkToRemove(D2, "typedef foo_t bar_t;\n");
+  checkAddToClass(D2, "typedef foo_t bar_t;\n");
   checkTypeRef(D2.ImplRefs, {"foo_t"});
 
   const auto &D3 = getResult()[2];
   EXPECT_EQ(D3.Name, "bar_p");
   EXPECT_EQ(D3.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D3.Expansion, "bar_t *");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnCustomType, D3.FullRange,
-    "typedef bar_t * bar_p;\n"));
+  checkToRemove(D3, "typedef bar_t * bar_p;\n");
+  checkAddToClass(D3, "typedef bar_t * bar_p;\n");
   checkTypeRef(D3.ImplRefs, {"bar_t"});
 
   const auto &D4 = getResult()[3];
   EXPECT_EQ(D4.Name, "foo_p");
   EXPECT_EQ(D4.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D4.Expansion, "bar_p");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnCustomType, D4.FullRange,
-    "typedef bar_p foo_p;\n"));
+  checkToRemove(D4, "typedef bar_p foo_p;\n");
+  checkAddToClass(D4, "typedef bar_p foo_p;\n");
   checkTypeRef(D4.ImplRefs, {"bar_p"});
 }
 
@@ -284,37 +304,32 @@ TEST_F(MatcherTest, TypedefOnVoidPtr) {
 
   const auto &D1 = getResult()[0];
   EXPECT_EQ(D1.Name, "void_t");
-  EXPECT_EQ(D1.Expansion, "void");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnVoidPtr, D1.FullRange,
-    "typedef void void_t;\n"));
+  checkToRemove(D1, "typedef void void_t;\n");
+  checkAddToClass(D1, "typedef void void_t;\n");
   checkTypeRef(D1.ImplRefs, {});
 
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "void_p");
-  EXPECT_EQ(D2.Expansion, "void *");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnVoidPtr, D2.FullRange,
-    "typedef void * void_p;\n"));
+  checkToRemove(D2, "typedef void * void_p;\n");
+  checkAddToClass(D2, "typedef void * void_p;\n");
   checkTypeRef(D2.ImplRefs, {});
 
   const auto &D3 = getResult()[2];
   EXPECT_EQ(D3.Name, "void_t2");
-  EXPECT_EQ(D3.Expansion, "void_t");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnVoidPtr, D3.FullRange,
-    "typedef void_t void_t2;\n"));
+  checkToRemove(D3, "typedef void_t void_t2;\n");
+  checkAddToClass(D3, "typedef void_t void_t2;\n");
   checkTypeRef(D3.ImplRefs, {"void_t"});
 
   const auto &D4 = getResult()[3];
   EXPECT_EQ(D4.Name, "void_p2");
-  EXPECT_EQ(D4.Expansion, "void_t2 *");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnVoidPtr, D4.FullRange,
-    "typedef void_t2 * void_p2;\n"));
+  checkToRemove(D4, "typedef void_t2 * void_p2;\n");
+  checkAddToClass(D4, "typedef void_t2 * void_p2;\n");
   checkTypeRef(D4.ImplRefs, {"void_t2"});
 
   const auto &D5 = getResult()[4];
   EXPECT_EQ(D5.Name, "void_p3");
-  EXPECT_EQ(D5.Expansion, "void_p2");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnVoidPtr, D5.FullRange,
-    "typedef void_p2 void_p3;\n"));
+  checkToRemove(D5, "typedef void_p2 void_p3;\n");
+  checkAddToClass(D5, "typedef void_p2 void_p3;\n");
   checkTypeRef(D5.ImplRefs, {"void_p2"});
 }
 
@@ -339,49 +354,43 @@ TEST_F(MatcherTest, TypedefOnArray) {
 
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "a_t");
-  EXPECT_EQ(D2.Expansion, "foo_t[]");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnArray, D2.FullRange,
-    "typedef foo_t a_t[];\n"));
+  checkToRemove(D2, "typedef foo_t a_t[];\n");
+  checkAddToClass(D2, "typedef foo_t a_t[];\n");
   checkTypeRef(D2.ImplRefs, {"foo_t"});
   checkEditLocations(D2, {EditLocation(InsertType, 5)});
 
   const auto &D3 = getResult()[2];
   EXPECT_EQ(D3.Name, "a1_t");
-  EXPECT_EQ(D3.Expansion, "foo_t[10]");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnArray, D3.FullRange,
-    "typedef foo_t a1_t[10];\n"));
+  checkToRemove(D3, "typedef foo_t a1_t[10];\n");
+  checkAddToClass(D3, "typedef foo_t a1_t[10];\n");
   checkTypeRef(D3.ImplRefs, {"foo_t"});
   checkEditLocations(D3, {EditLocation(InsertType, 5)});
 
   const auto &D4 = getResult()[3];
   EXPECT_EQ(D4.Name, "a2_t");
-  EXPECT_EQ(D4.Expansion, "foo_t[][20]");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnArray, D4.FullRange,
-    "typedef foo_t a2_t[][20];\n"));
+  checkToRemove(D4, "typedef foo_t a2_t[][20];\n");
+  checkAddToClass(D4, "typedef foo_t a2_t[][20];\n");
   checkTypeRef(D4.ImplRefs, {"foo_t"});
   checkEditLocations(D4, {EditLocation(InsertType, 5)});
 
   const auto &D5 = getResult()[4];
   EXPECT_EQ(D5.Name, "a3_t");
-  EXPECT_EQ(D5.Expansion, "foo_t[10][20]");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnArray, D5.FullRange,
-    "typedef foo_t a3_t[10][20];\n"));
+  checkToRemove(D5, "typedef foo_t a3_t[10][20];\n");
+  checkAddToClass(D5, "typedef foo_t a3_t[10][20];\n");
   checkTypeRef(D5.ImplRefs, {"foo_t"});
   checkEditLocations(D5, {EditLocation(InsertType, 5)});
 
   const auto &D6 = getResult()[5];
   EXPECT_EQ(D6.Name, "a1_p_t");
-  EXPECT_EQ(D6.Expansion, "foo_t *[][10]");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnArray, D6.FullRange,
-    "typedef foo_t * a1_p_t[][10];\n"));
+  checkToRemove(D6, "typedef foo_t * a1_p_t[][10];\n");
+  checkAddToClass(D6, "typedef foo_t * a1_p_t[][10];\n");
   checkTypeRef(D6.ImplRefs, {"foo_t"});
   checkEditLocations(D6, {EditLocation(InsertType, 7)});
 
   const auto &D7 = getResult()[6];
   EXPECT_EQ(D7.Name, "bar_t");
-  EXPECT_EQ(D7.Expansion, "a_t");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnArray, D7.FullRange,
-    "typedef a_t bar_t;\n"));
+  checkToRemove(D7, "typedef a_t bar_t;\n");
+  checkAddToClass(D7, "typedef a_t bar_t;\n");
   checkTypeRef(D7.ImplRefs, {"a_t"});
   checkEditLocations(D7, {});
 }
@@ -405,17 +414,15 @@ TEST_F(MatcherTest, TypedefOnStruct) {
   const auto &D1 = getResult()[0];
   EXPECT_EQ(D1.Name, "S_t");
   EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D1.Expansion, "struct S");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnStruct, D1.FullRange,
-    "typedef struct S S_t;\n"));
+  checkToRemove(D1, "typedef struct S S_t;\n");
+  checkAddToClass(D1, "typedef struct S S_t;\n");
   checkTypeRef(D1.ImplRefs, {"S"});
 
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "S_p");
   EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D2.Expansion, "struct S *");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnStruct, D2.FullRange,
-    "typedef struct S * S_p;\n"));
+  checkToRemove(D2, "typedef struct S * S_p;\n");
+  checkAddToClass(D2, "typedef struct S * S_p;\n");
   // Note: struct S in not necessary for S_p, since it is used as a pointer
   checkTypeRef(D2.ImplRefs, {});
 }
@@ -444,9 +451,8 @@ TEST_F(MatcherTest, TypedefOnFunctionPtr) {
   const auto &D1 = getResult()[1];
   EXPECT_EQ(D1.Name, "fptr");
   EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D1.Expansion, "int (*(*)(int))(int *)");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnFunctionPtr, D1.FullRange,
-    "typedef int (*(*fptr)(int))(int[5]);\n"));
+  checkToRemove(D1, "typedef int (*(*fptr)(int))(int[5]);\n");
+  checkAddToClass(D1, "typedef int (*(*fptr)(int))(int[5]);\n");
   checkTypeRef(D1.ImplRefs, {});
   checkEditLocations(D1, {EditLocation(InsertClass, 5),
                           EditLocation(InsertClass, 7),
@@ -455,9 +461,8 @@ TEST_F(MatcherTest, TypedefOnFunctionPtr) {
   const auto &D2 = getResult()[2];
   EXPECT_EQ(D2.Name, "fptr2");
   EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D2.Expansion, "int (*(*)(int))(foo_t (**)(int))");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnFunctionPtr, D2.FullRange,
-    "typedef int (*(*fptr2)(int))(foo_t (*[10])(int));\n"));
+  checkToRemove(D2, "typedef int (*(*fptr2)(int))(foo_t (*[10])(int));\n");
+  checkAddToClass(D2, "typedef int (*(*fptr2)(int))(foo_t (*[10])(int));\n");
   checkTypeRef(D2.ImplRefs, {"foo_t"});
   checkEditLocations(D2, {EditLocation(InsertClass, 5),
                           EditLocation(InsertClass, 7),
@@ -467,9 +472,8 @@ TEST_F(MatcherTest, TypedefOnFunctionPtr) {
   const auto &D3 = getResult()[3];
   EXPECT_EQ(D3.Name, "fptr3");
   EXPECT_EQ(D3.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D3.Expansion, "int (*(*[10])(int))(foo_t (**)(int))");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnFunctionPtr, D3.FullRange,
-    "typedef int (*(*fptr3[10])(int))(foo_t (*[10])(int));\n"));
+  checkToRemove(D3, "typedef int (*(*fptr3[10])(int))(foo_t (*[10])(int));\n");
+  checkAddToClass(D3, "typedef int (*(*fptr3[10])(int))(foo_t (*[10])(int));\n");
   checkTypeRef(D3.ImplRefs, {"foo_t"});
   checkEditLocations(D3, {EditLocation(InsertClass, 5),
                           EditLocation(InsertClass, 7),
@@ -479,9 +483,8 @@ TEST_F(MatcherTest, TypedefOnFunctionPtr) {
   const auto &D4 = getResult()[4];
   EXPECT_EQ(D4.Name, "fptr4");
   EXPECT_EQ(D4.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D4.Expansion, "int (*(*(*[10])(int))(foo_t (**)(int)))()");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnFunctionPtr, D4.FullRange,
-    "typedef int (*(*(*fptr4[10])(int))(foo_t (*[10])(int)))();\n"));
+  checkToRemove(D4, "typedef int (*(*(*fptr4[10])(int))(foo_t (*[10])(int)))();\n");
+  checkAddToClass(D4, "typedef int (*(*(*fptr4[10])(int))(foo_t (*[10])(int)))();\n");
   checkTypeRef(D4.ImplRefs, {"foo_t"});
   checkEditLocations(D4, {EditLocation(InsertClass, 5),
                           EditLocation(InsertClass, 7),
@@ -493,9 +496,8 @@ TEST_F(MatcherTest, TypedefOnFunctionPtr) {
   const auto &D5 = getResult()[5];
   EXPECT_EQ(D5.Name, "fptr5");
   EXPECT_EQ(D5.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D5.Expansion, "int (*(*[10])(int))(fptr2 *)");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnFunctionPtr, D5.FullRange,
-    "typedef int (*(*fptr5[10])(int))(fptr2[8]);\n"));
+  checkToRemove(D5, "typedef int (*(*fptr5[10])(int))(fptr2[8]);\n");
+  checkAddToClass(D5, "typedef int (*(*fptr5[10])(int))(fptr2[8]);\n");
   checkTypeRef(D5.ImplRefs, {"fptr2"});
   checkEditLocations(D5, {EditLocation(InsertClass, 5),
                           EditLocation(InsertClass, 7),
@@ -504,9 +506,8 @@ TEST_F(MatcherTest, TypedefOnFunctionPtr) {
   const auto &D6 = getResult()[6];
   EXPECT_EQ(D6.Name, "fptr6");
   EXPECT_EQ(D6.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D6.Expansion, "int (*(*(*[10])(int))(foo_t (**)(int)))(struct S)");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnFunctionPtr, D6.FullRange,
-    "typedef int (*(*(*fptr6[10])(int))(foo_t (*[10])(int)))(struct S);\n"));
+  checkToRemove(D6, "typedef int (*(*(*fptr6[10])(int))(foo_t (*[10])(int)))(struct S);\n");
+  checkAddToClass(D6, "typedef int (*(*(*fptr6[10])(int))(foo_t (*[10])(int)))(struct S);\n");
   checkTypeRef(D6.ImplRefs, {"foo_t", "S"});
   checkEditLocations(D6, {EditLocation(InsertClass, 5),
                           EditLocation(InsertClass, 7),
@@ -517,9 +518,8 @@ TEST_F(MatcherTest, TypedefOnFunctionPtr) {
   const auto &D7 = getResult()[7];
   EXPECT_EQ(D7.Name, "fptr7");
   EXPECT_EQ(D7.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D7.Expansion, "struct S (*(*(*[10])(int))(foo_t (**)(int)))()");
-  EXPECT_TRUE(verifyRangeMatched(TypedefOnFunctionPtr, D7.FullRange,
-    "typedef struct S (*(*(*fptr7[10])(int))(foo_t (*[10])(int)))();\n"));
+  checkToRemove(D7, "typedef struct S (*(*(*fptr7[10])(int))(foo_t (*[10])(int)))();\n");
+  checkAddToClass(D7, "typedef struct S (*(*(*fptr7[10])(int))(foo_t (*[10])(int)))();\n");
   checkTypeRef(D7.ImplRefs, {"foo_t", "S"});
   checkEditLocations(D7, {EditLocation(InsertClass, 10),
                           EditLocation(InsertClass, 12),
@@ -561,13 +561,9 @@ TEST_F(MatcherTest, TypedefFromMacro) {
 
   EXPECT_EQ(D.Name, "my_int_t");
   EXPECT_EQ(D.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D.Expansion, "int");
-  EXPECT_TRUE(verifyRangeMatched(TypedefFromMacro, D.FullRange,
-    "DEFINE_TYPEDEF(my_int_t, int, v)\n"));
+  checkToRemove(D, "DEFINE_TYPEDEF(my_int_t, int, v)\n");
+  checkAddToClass(D, "DEFINE_TYPEDEF(my_int_t, int, v)\n");
   checkTypeRef(D.ImplRefs, {});
-
-  // Check the macro expansion
-  EXPECT_FALSE(D.Expansion.empty());
 }
 
 
@@ -587,22 +583,17 @@ TEST_F(MatcherTest, SimpleStruct) {
   const auto &D = getResult().front();
 
   EXPECT_EQ(D.Name, "S");
-  EXPECT_EQ(D.FilePath, "a.c");
+  EXPECT_TRUE(D.SourcePath.ends_with("a.c"));
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
   EXPECT_FALSE(D.IsStatic);
-
-  EXPECT_TRUE(D.Expansion.empty());
-
-  EXPECT_EQ(D.InfRange, Range(0, 0));
-  EXPECT_TRUE(verifyRangeMatched(SimpleStruct, D.FullRange,
-    SimpleStruct.ltrim()));
+  checkToRemove(D, SimpleStruct.ltrim());
+  checkAddToClass(D, SimpleStruct.ltrim());
 
   EXPECT_EQ(D.InfHash, hash_code(0));
   EXPECT_EQ(D.ImplHash, getHashForStringList(
               {"struct", "S", "{", "int", "a", ";", "int", "b", ";", "}"}
             ));
 
-  EXPECT_FALSE(D.NeedExpansion);
   EXPECT_TRUE(D.IsDefinition);
   EXPECT_FALSE(D.IsInline);
   EXPECT_FALSE(D.IsUnnamed);
@@ -627,21 +618,16 @@ TEST_F(MatcherTest, SimpleUnion) {
   const auto &D = getResult().front();
 
   EXPECT_EQ(D.Name, "U");
-  EXPECT_EQ(D.FilePath, "a.c");
+  EXPECT_TRUE(D.SourcePath.ends_with("a.c"));
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
-
-  EXPECT_TRUE(D.Expansion.empty());
-
-  EXPECT_EQ(D.InfRange, Range(0, 0));
-  EXPECT_TRUE(verifyRangeMatched(SimpleUnion, D.FullRange,
-    SimpleUnion.ltrim()));
+  checkToRemove(D, SimpleUnion.ltrim());
+  checkAddToClass(D, SimpleUnion.ltrim());
 
   EXPECT_EQ(D.InfHash, hash_code(0));
   EXPECT_EQ(D.ImplHash, getHashForStringList(
               {"union", "U", "{", "unsigned", "a", ";", "short", "b", ";", "}"}
             ));
 
-  EXPECT_FALSE(D.NeedExpansion);
   EXPECT_TRUE(D.IsDefinition);
   EXPECT_FALSE(D.IsInline);
   EXPECT_FALSE(D.IsUnnamed);
@@ -663,14 +649,11 @@ TEST_F(MatcherTest, SimpleStructDecl) {
   const auto &D = getResult().front();
 
   EXPECT_EQ(D.Name, "S");
-  EXPECT_EQ(D.FilePath, "a.c");
+  EXPECT_TRUE(D.SourcePath.ends_with("a.c"));
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
 
-  EXPECT_TRUE(D.Expansion.empty());
-
-  EXPECT_EQ(D.InfRange, Range(0, 0));
-  EXPECT_TRUE(verifyRangeMatched(SimpleStructDecl, D.FullRange,
-    SimpleStructDecl.ltrim()));
+  checkToRemove(D, SimpleStructDecl.ltrim());
+  checkAddToClass(D, SimpleStructDecl.ltrim());
 
   EXPECT_EQ(D.InfHash, hash_code(0));
   EXPECT_EQ(D.ImplHash, hash_code(0));
@@ -701,11 +684,8 @@ TEST_F(MatcherTest, StructWithComments) {
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
 
-  EXPECT_TRUE(D.Expansion.empty());
-
-  EXPECT_EQ(D.InfRange, Range(0, 0));
-  EXPECT_TRUE(verifyRangeMatched(StructWithComments, D.FullRange,
-    "// Comment 1", "// Comment3\n"));
+  checkToRemove(D, "// Comment 1", "// Comment3\n");
+  checkAddToClass(D, "// Comment 1", "// Comment3\n");
 
   EXPECT_EQ(D.InfHash, hash_code(0));
   EXPECT_EQ(D.ImplHash, getHashForStringList(
@@ -767,11 +747,8 @@ TEST_F(MatcherTest, AnonymousStruct) {
   EXPECT_EQ(D.Name, "");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
 
-  EXPECT_TRUE(D.Expansion.empty());
-
-  EXPECT_EQ(D.InfRange, Range(0, 0));
-  EXPECT_TRUE(verifyRangeMatched(AnonymousStructS, D.FullRange,
-    AnonymousStructS.ltrim()));
+  checkToRemove(D, AnonymousStructS.ltrim());
+  checkAddToClass(D, AnonymousStructS.ltrim());
 
   EXPECT_EQ(D.InfHash, hash_code(0));
   EXPECT_EQ(D.ImplHash, getHashForStringList(
@@ -802,8 +779,8 @@ TEST_F(MatcherTest, NestedStruct) {
 
   const auto &D = getResult().front();
   EXPECT_EQ(D.Name, "S1");
-  EXPECT_TRUE(verifyRangeMatched(NestedStruct, D.FullRange,
-    NestedStruct.ltrim()));
+  checkToRemove(D, NestedStruct.ltrim());
+  checkAddToClass(D, NestedStruct.ltrim());
   EXPECT_EQ(D.ImplHash, getHashForStringList(
               {"struct", "S1", "{", "struct", "S2", "{", "int", "x", ";", "}",
               "a", ";", "int", "y", ";", "}"} ));
@@ -852,17 +829,14 @@ TEST_F(MatcherTest, StructWithMacro) {
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
 
-  EXPECT_TRUE(D.Expansion.empty());
-
-  EXPECT_TRUE(verifyRangeMatched(StructWithMacro, D.FullRange,
-    "struct S {", "};\n"));
+  checkToRemove(D, "struct S {", "};\n");
+  checkAddToClass(D, "struct S {", "};\n");
 
   EXPECT_EQ(D.ImplHash, getHashForStringList(
               {"struct", "S", "{", "int", "a", ";", "int", "x", ";", "int", "b",
               ";", "}"}
             ));
 
-  EXPECT_FALSE(D.NeedExpansion);
   EXPECT_TRUE(D.IsDefinition);
   EXPECT_FALSE(D.IsInline);
   EXPECT_FALSE(D.IsUnnamed);
@@ -885,15 +859,9 @@ TEST_F(MatcherTest, StructFromMacro) {
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
 
-  EXPECT_TRUE(D.Expansion.empty());
-
   EXPECT_TRUE(D.IsDefinition);
   EXPECT_FALSE(D.IsInline);
   EXPECT_FALSE(D.IsUnnamed);
-
-  EXPECT_TRUE(D.NeedExpansion);
-  EXPECT_TRUE(verifyRangeMatched(StructFromMacro, D.ExpansionReplaced,
-    "MACRO1(a, b);\n"));
 }
 
 
@@ -919,15 +887,9 @@ TEST_F(MatcherTest, StructPartialFromMacro) {
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
 
-  EXPECT_TRUE(D.Expansion.empty());
-
   EXPECT_TRUE(D.IsDefinition);
   EXPECT_FALSE(D.IsInline);
   EXPECT_FALSE(D.IsUnnamed);
-
-  EXPECT_TRUE(D.NeedExpansion);
-  EXPECT_TRUE(verifyRangeMatched(StructPartialFromMacro, D.ExpansionReplaced,
-    "MACRO1(S) {\n", "};\n"));
 }
 
 
@@ -949,10 +911,6 @@ TEST_F(MatcherTest, StructInMacro) {
 
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
-
-  EXPECT_TRUE(D.NeedExpansion);
-  EXPECT_TRUE(verifyRangeMatched(StructInMacro, D.ExpansionReplaced,
-    "MACRO3(aaa);\n"));
 
   // EXPECT_EQ(D.Expansion, "struct S { int a; int b; };\n");
   // EXPECT_TRUE(verifyRangeMatched(StructExpandFromMacro,
@@ -1045,8 +1003,8 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   EXPECT_EQ(D1.Name, "S");
   EXPECT_EQ(D1.Kind, Decl::Kind::Record);
   EXPECT_TRUE(D1.RecordID);
-  EXPECT_TRUE(verifyRangeMatched(CombinedTypedefAndStruct, D1.FullRange,
-    "struct S {", "} S_t;\n"));
+  checkToRemove(D1, "struct S {", "} S_t;\n");
+  checkAddToClass(D1, "struct S {", "} S_t;\n");
   EXPECT_EQ(D1.ImplHash, getHashForStringList(
               {"struct", "S", "{", "int", "a", ";" , "}"}));
   checkTypeRef(D1.ImplRefs, {});
@@ -1054,10 +1012,9 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "S_t");
   EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D2.Expansion, "struct S");
   EXPECT_EQ(D2.RecordID, D1.RecordID);
-  EXPECT_TRUE(verifyRangeMatched(CombinedTypedefAndStruct, D2.FullRange,
-    "typedef struct S {", "} S_t;\n"));
+  checkToRemove(D2, "typedef struct S {", "} S_t;\n");
+  checkAddToClass(D2, "typedef struct S {", "} S_t;\n");
   checkTypeRef(D2.ImplRefs, {"S"});
 
   const auto &D3 = getResult()[2];
@@ -1065,8 +1022,8 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   EXPECT_EQ(D3.Kind, Decl::Kind::Record);
   EXPECT_TRUE(D3.RecordID);
   EXPECT_TRUE(D3.IsUnnamed);
-  EXPECT_TRUE(verifyRangeMatched(CombinedTypedefAndStruct, D3.FullRange,
-    "struct {", "} S2_t;\n"));
+  checkToRemove(D3, "struct {", "} S2_t;\n");
+  checkAddToClass(D3, "struct {", "} S2_t;\n");
   EXPECT_EQ(D3.ImplHash, getHashForStringList(
               {"struct", "{", "short", "b", ";", "}"}));
   checkTypeRef(D3.ImplRefs, {});
@@ -1074,10 +1031,9 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   const auto &D4 = getResult()[3];
   EXPECT_EQ(D4.Name, "S2_t");
   EXPECT_EQ(D4.Kind, Decl::Kind::Typedef);
-  // EXPECT_EQ(D4.Expansion, ""); // FIXME
   EXPECT_EQ(D4.RecordID, D3.RecordID);
-  EXPECT_TRUE(verifyRangeMatched(CombinedTypedefAndStruct, D4.FullRange,
-    "typedef struct {", "} S2_t;\n"));
+  checkToRemove(D4, "typedef struct {", "} S2_t;\n");
+  checkAddToClass(D4, "typedef struct {", "} S2_t;\n");
   checkTypeRef(D4.ImplRefs, {});
 
   const auto &D5 = getResult()[4];
@@ -1090,18 +1046,17 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   EXPECT_EQ(D6.Kind, Decl::Kind::Record);
   EXPECT_TRUE(D6.RecordID);
   EXPECT_TRUE(D6.IsUnnamed);
-  EXPECT_TRUE(verifyRangeMatched(CombinedTypedefAndStruct, D6.FullRange,
-        "struct {", "} Sa_t[][10];\n"));
+  checkToRemove(D6, "struct {", "} Sa_t[][10];\n");
+  checkAddToClass(D6, "struct {", "} Sa_t[][10];\n");
   EXPECT_EQ(D6.ImplHash, getHashForStringList(
               {"struct", "{", "int", "x", ";", "}"}));
 
   const auto &D7 = getResult()[6];
   EXPECT_EQ(D7.Name, "Sa_t");
   EXPECT_EQ(D7.Kind, Decl::Kind::Typedef);
-  // EXPECT_EQ(D7.Expansion, "struct { int x; }[][10]");
   EXPECT_EQ(D7.RecordID, D6.RecordID);
-  EXPECT_TRUE(verifyRangeMatched(CombinedTypedefAndStruct, D7.FullRange,
-    "typedef struct {", "} Sa_t[][10];\n"));
+  checkToRemove(D7, "typedef struct {", "} Sa_t[][10];\n");
+  checkAddToClass(D7, "typedef struct {", "} Sa_t[][10];\n");
   checkTypeRef(D7.ImplRefs, {});
 }
 
