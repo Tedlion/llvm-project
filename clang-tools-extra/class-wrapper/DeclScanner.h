@@ -16,6 +16,8 @@
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/ArrayRef.h"
 
+#include <vector>
+
 namespace clang::class_wrapper {
 using namespace clang::ast_matchers;
 using namespace clang::tooling;
@@ -113,23 +115,26 @@ struct DeclEntry {
   std::string Name;
   Decl::Kind Kind;
 
-  std::string FilePath; // source file's path relative to SourceRoot
+  std::string SourcePath; // source file's path
 
-  // The Expansion is only necessary when:
-  // 1. Larger than the Decl, or
-  // 2. Contains the Decl Name
-  // Then the expansion will be the string within AssociatedRange of the Decl
-  std::string Expansion;
-  Range ExpansionReplaced{0, 0};
+  // // The Expansion is only necessary when:
+  // // 1. Larger than the Decl, or
+  // // 2. Contains the Decl Name
+  // // Then the expansion will be the string within AssociatedRange of the Decl
+  // std::string Expansion;
+  // Range ExpansionReplaced{0, 0};
 
   // sorted by Offset
   SmallVector<EditLocation, 4> EditLocations;
+  //
+  // // If the Expansion is empty, the following Ranges points to the sources;
+  // // otherwise, the Ranges points to the Expansion.
+  // Range NameRange{0, 0};
+  // Range InfRange{0, 0}; // used in function
+  // Range FullRange{0, 0};
 
-  // If the Expansion is empty, the following Ranges points to the sources;
-  // otherwise, the Ranges points to the Expansion.
-  Range NameRange{0, 0};
-  Range InfRange{0, 0}; // used in function
-  Range FullRange{0, 0};
+  Range ToRemove{0, 0};   // range from source file
+  Range AddToClass{0, 0}; // range of the preprocessed file
 
   hash_code InfHash{0};   // for function only
   hash_code ImplHash{0};
@@ -139,7 +144,7 @@ struct DeclEntry {
   const RecordDecl * RecordID = nullptr;
 
   unsigned IsStatic       : 1 = false; // for functions and variables only
-  unsigned NeedExpansion  : 1 = false; // Fails to expand the macro
+  // unsigned NeedExpansion  : 1 = false; // Fails to expand the macro
   unsigned IsDefinition   : 1 = false;
   unsigned IsInline       : 1 = false; // for function only
   unsigned IsUnnamed      : 1 = false; // for record only
@@ -153,21 +158,6 @@ struct DeclEntry {
 
   bool operator==(const DeclEntry &) const = default;
 };
-
-
-std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
-                                      const RecordDecl &RD,
-                                      const CompilerInstance &CI);
-
-std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
-                                      const TypedefDecl &TD,
-                                      const CompilerInstance &CI);
-
-void fillDeclEntry(DeclEntry & DE, const MatchFinder::MatchResult &Result,
-                   const RecordDecl &RD, const CompilerInstance *CI);
-
-void fillDeclEntry(DeclEntry & DE, const MatchFinder::MatchResult &Result,
-                   const TypedefDecl &TD, const CompilerInstance *CI);
 
 
 extern const Matcher<Decl> TypedefDeclMatcher;
@@ -248,7 +238,7 @@ public:
                   const ClassWrapperContext &Context);
 
   // Implementation of interface of SourceFileCallbacks
-  bool handleBeginSource(CompilerInstance &CI) override;
+  bool handleBeginSource(CompilerInstance &Compiler) override;
   void handleEndSource() override;
 
   void postHandleNode(const MatchFinder::MatchResult &Result,
@@ -258,12 +248,11 @@ public:
   template <std::derived_from<Decl> NodeType>
   void handleNode(const MatchFinder::MatchResult &Result,
                   const NodeType &Node) {
-    if (auto Entry = getDeclEntry(Result, Node, *CompilerInstancePtr)) {
+    if (auto Entry = getDeclEntry(Result, Node)) {
       DeclEntries.push_back(std::move(*Entry));
       // postHandleNode(Result, Node, DeclEntries.back());
     }
   }
-
 
   template <typename NodeType>
   class SourceMatchHandler : public MatchFinder::MatchCallback {
@@ -273,24 +262,7 @@ public:
     SourceMatchHandler(DeclScanner &Scanner) : Scanner(Scanner) {}
 
     void run(const MatchFinder::MatchResult &Result) override {
-      Scanner.MatchIndex++;
-      const NodeType *Node = Result.Nodes.getNodeAs<NodeType>(getBindID<NodeType>());
-      if (!Node) {
-        llvm::errs() << "Failed to get node as " << getBindID<NodeType>() << "\n";
-        return;
-      }
-
-      StringRef FileName = Result.SourceManager->getFilename(
-          Node->getBeginLoc());
-      if (!Scanner.NeedWrapping(FileName)) {
-        return;
-      }
-
-      if (auto Entry =
-          getDeclEntry(Result, *Node, *Scanner.CompilerInstancePtr)) {
-        Scanner.DeclEntries.push_back(std::move(*Entry));
-        Scanner.EntryIndices.push_back(Scanner.MatchIndex);
-      }
+      Scanner.onSourceMatch<NodeType>(Result);
     }
   };
 
@@ -303,15 +275,7 @@ public:
     PPMatchHandler(DeclScanner &Scanner) : Scanner(Scanner) {}
 
     void run(const MatchFinder::MatchResult &Result) override {
-      Scanner.MatchIndex++;
-      if (Scanner.CurrectEntryIndex >= Scanner.EntryIndices.size())
-        return;
-      if (Scanner.EntryIndices[Scanner.CurrectEntryIndex] != Scanner.MatchIndex)
-        return;
-
-      const NodeType *Node = Result.Nodes.getNodeAs<NodeType>(getBindID<NodeType>());
-      fillDeclEntry(Scanner.DeclEntries[Scanner.MatchIndex], Result, *Node,
-                    Scanner.CompilerInstancePtr);
+      Scanner.onPPMatch<NodeType>(Result);
     }
   };
 
@@ -353,17 +317,68 @@ private:
   MatchFinder SourceFinder;
   MatchFinder PreprocessedFinder;
 
-  std::string CurrentFilePath;
+  FileID CurrentFile;
+  // std::string CurrentFilePath;
   // std::string RelativeCurrentFilePath; // relative to SourceRoot
   std::vector<DeclEntry> DeclEntries;
   // indices of recorded DeclEntries in first scanning
   std::vector<unsigned> EntryIndices;
-  unsigned CurrectEntryIndex = 0;
+  unsigned CurrentEntryIndex = 0;
 
-  const CompilerInstance * CompilerInstancePtr = nullptr;
+  const CompilerInstance *CI = nullptr;
   std::unique_ptr<MacroExpansionRecorder> MacroContext;
 
   std::vector<std::unique_ptr<MatchFinder::MatchCallback>> MatchHandlers;
+  std::vector<std::pair<SourceLocation, Token>> PPTokens;
+
+  decltype(PPTokens)::const_iterator findTokenAt(SourceLocation Loc) const;
+
+  std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
+                                        const RecordDecl &RD);
+  std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
+                                        const TypedefDecl &TD);
+
+  void fillDeclEntry(DeclEntry &DE, const MatchFinder::MatchResult &Result,
+                     const RecordDecl &RD);
+  void fillDeclEntry(DeclEntry &DE, const MatchFinder::MatchResult &Result,
+                     const TypedefDecl &TD);
+
+  template <typename NodeType>
+  void onSourceMatch(const MatchFinder::MatchResult &Result) {
+    MatchIndex++;
+    const NodeType *Node =
+        Result.Nodes.getNodeAs<NodeType>(getBindID<NodeType>());
+    if (!Node) {
+      llvm::errs() << "Failed to get node as " << getBindID<NodeType>() << "\n";
+      return;
+    }
+
+    StringRef FileName = Result.SourceManager->getFilename(Node->getBeginLoc());
+    if (!NeedWrapping(FileName))
+      return;
+
+    if (auto Entry = getDeclEntry(Result, *Node)) {
+      DeclEntries.push_back(std::move(*Entry));
+      EntryIndices.push_back(MatchIndex);
+    }
+  }
+
+
+  template <typename NodeType>
+  void onPPMatch(const MatchFinder::MatchResult &Result) {
+    MatchIndex++;
+    if (CurrentEntryIndex >= EntryIndices.size())
+      return;
+    if (EntryIndices[CurrentEntryIndex] != MatchIndex)
+      return;
+
+    const NodeType *Node =
+        Result.Nodes.getNodeAs<NodeType>(getBindID<NodeType>());
+    fillDeclEntry(DeclEntries[CurrentEntryIndex], Result, *Node);
+    CurrentEntryIndex++;
+  }
+
+  hash_code getTokenHash(SourceRange SR) const;
 };
 
 

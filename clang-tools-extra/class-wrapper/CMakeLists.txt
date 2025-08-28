@@ -5,7 +5,8 @@ set(LLVM_LINK_COMPONENTS
         FrontendOpenMP
 )
 
-add_definitions(-D_SILENCE_CXX23_ALIGNED_UNION_DEPRECATION_WARNING)
+add_definitions(-D_SILENCE_CXX23_ALIGNED_UNION_DEPRECATION_WARNING
+-UNDEBUG)
 
 if (MSVC)
     add_compile_options(/Od /Zi)
