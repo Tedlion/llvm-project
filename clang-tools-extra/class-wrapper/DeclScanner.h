@@ -115,7 +115,7 @@ struct DeclEntry {
   std::string Name;
   Decl::Kind Kind;
 
-  std::string SourcePath; // source file's path
+  std::string SourcePath; // source file's path, where to perform the ToRemove
 
   // // The Expansion is only necessary when:
   // // 1. Larger than the Decl, or
@@ -331,7 +331,7 @@ private:
   std::vector<std::unique_ptr<MatchFinder::MatchCallback>> MatchHandlers;
   std::vector<std::pair<SourceLocation, Token>> PPTokens;
 
-  decltype(PPTokens)::const_iterator findTokenAt(SourceLocation Loc) const;
+  decltype(PPTokens)::const_iterator findTokenOrAfter(SourceLocation Loc) const;
 
   std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                         const RecordDecl &RD);
@@ -379,6 +379,8 @@ private:
   }
 
   hash_code getTokenHash(SourceRange SR) const;
+
+  CharSourceRange getFullRange(SourceRange SR) const;
 };
 
 
@@ -397,6 +399,7 @@ public:
     Opts.ShowCPP = true;
     Opts.KeepSystemIncludes = true;
     Opts.ShowLineMarkers = false;
+    Opts.ShowComments = true;
 
     if (Dependencies) {
       Collector = std::make_unique<DependencyCollector>();

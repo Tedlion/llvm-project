@@ -183,7 +183,8 @@ int main(int argc, const char **argv) {
         getInsertArgumentAdjuster("-w"));
     AdjustingCompilations->appendArgumentsAdjuster(
         getInsertArgumentAdjuster("-Wno-error"));
-
+    AdjustingCompilations->appendArgumentsAdjuster(
+        getInsertArgumentAdjuster("-fparse-all-comments"));
     for (auto & Filename : AdjustingCompilations->getAllFiles()) {
       if (!SrcFilter.isMatched(Filename))
         continue;

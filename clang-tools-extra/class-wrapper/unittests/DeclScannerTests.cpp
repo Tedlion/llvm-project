@@ -583,7 +583,7 @@ TEST_F(MatcherTest, SimpleStruct) {
   const auto &D = getResult().front();
 
   EXPECT_EQ(D.Name, "S");
-  EXPECT_TRUE(D.SourcePath.ends_with("a.c"));
+  EXPECT_EQ(D.SourcePath, "a.c");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
   EXPECT_FALSE(D.IsStatic);
   checkToRemove(D, SimpleStruct.ltrim());
@@ -618,7 +618,7 @@ TEST_F(MatcherTest, SimpleUnion) {
   const auto &D = getResult().front();
 
   EXPECT_EQ(D.Name, "U");
-  EXPECT_TRUE(D.SourcePath.ends_with("a.c"));
+  EXPECT_EQ(D.SourcePath,"a.c");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
   checkToRemove(D, SimpleUnion.ltrim());
   checkAddToClass(D, SimpleUnion.ltrim());
@@ -649,11 +649,11 @@ TEST_F(MatcherTest, SimpleStructDecl) {
   const auto &D = getResult().front();
 
   EXPECT_EQ(D.Name, "S");
-  EXPECT_TRUE(D.SourcePath.ends_with("a.c"));
+  EXPECT_EQ(D.SourcePath,"a.c");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
 
   checkToRemove(D, SimpleStructDecl.ltrim());
-  checkAddToClass(D, SimpleStructDecl.ltrim());
+  checkAddToClass(D, "");
 
   EXPECT_EQ(D.InfHash, hash_code(0));
   EXPECT_EQ(D.ImplHash, hash_code(0));
@@ -708,23 +708,42 @@ char x;
 )c";
 
 
-TEST_F(MatcherTest, StructWithIfdef) {
+TEST_F(MatcherTest, StructWithIfdef1) {
   enableMatcher<RecordDecl>();
 
   ASSERT_TRUE(scanOnCode(StructWithIfdef));
+
+  ASSERT_EQ(getResult().size(), 1);
+  DeclEntry D = getResult().front();
+
+  EXPECT_EQ(D.ImplHash, getHashForStringList({"struct", "S", "{",
+              "int", "a", ";", "int", "b", ";", "}"}));
+}
+
+
+TEST_F(MatcherTest, StructWithIfdef2) {
+  enableMatcher<RecordDecl>();
+
   ASSERT_TRUE(scanOnCode(StructWithIfdef, "b.c", {"-DMACRO"}));
+
+  ASSERT_EQ(getResult().size(), 1);
+  DeclEntry D = getResult().front();
+
+  EXPECT_EQ(D.ImplHash, getHashForStringList({"struct", "S", "{",
+              "int", "a", ";", "char", "x", ";", "int", "b", ";", "}"}));
+}
+
+
+TEST_F(MatcherTest, StructWithIfdef3) {
+  enableMatcher<RecordDecl>();
+
   ASSERT_TRUE(scanOnCode(StructWithIfdef, "c.c", {"-DMACRO2"}));
 
-  ASSERT_EQ(getResult().size(), 3);
-  DeclEntry D1 = getResult()[0];
-  DeclEntry D2 = getResult()[1];
-  DeclEntry D3 = getResult()[2];
+  ASSERT_EQ(getResult().size(), 1);
+  DeclEntry D = getResult().front();
 
-  EXPECT_TRUE(D1.IsDefinition);
-  EXPECT_TRUE(D2.IsDefinition);
-  EXPECT_TRUE(D3.IsDefinition);
-  EXPECT_EQ(D1.ImplHash, D3.ImplHash);
-  EXPECT_NE(D1.ImplHash, D2.ImplHash);
+  EXPECT_EQ(D.ImplHash, getHashForStringList({"struct", "S", "{",
+              "int", "a", ";", "int", "b", ";", "}"}));
 }
 
 
@@ -829,8 +848,8 @@ TEST_F(MatcherTest, StructWithMacro) {
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
 
-  checkToRemove(D, "struct S {", "};\n");
-  checkAddToClass(D, "struct S {", "};\n");
+  checkToRemove(D, "struct S {\n  int a;\n  MACRO1\n  int b;\n};\n");
+  checkAddToClass(D, "struct S {\n  int a;\n  int x;\n  int b;\n};\n");
 
   EXPECT_EQ(D.ImplHash, getHashForStringList(
               {"struct", "S", "{", "int", "a", ";", "int", "x", ";", "int", "b",
@@ -851,13 +870,16 @@ MACRO1(a, b);
 
 TEST_F(MatcherTest, StructFromMacro) {
   enableMatcher<RecordDecl>();
-  ASSERT_TRUE(scanOnCode(StructFromMacro));
+  ASSERT_TRUE(scanOnCode(StructFromMacro, "dir/a.c"));
 
   ASSERT_EQ(getResult().size(), 1);
   const auto &D = getResult().front();
 
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
+
+  checkToRemove(D, "MACRO1(a, b);\n");
+  checkAddToClass(D, "struct S {int a, b;};\n");
 
   EXPECT_TRUE(D.IsDefinition);
   EXPECT_FALSE(D.IsInline);
@@ -886,6 +908,9 @@ TEST_F(MatcherTest, StructPartialFromMacro) {
 
   EXPECT_EQ(D.Name, "S");
   EXPECT_EQ(D.Kind, Decl::Kind::Record);
+
+  checkToRemove(D, "MACRO1(S) {\n", "};\n");
+  checkAddToClass(D, "struct S {\n", "};\n");
 
   EXPECT_TRUE(D.IsDefinition);
   EXPECT_FALSE(D.IsInline);
