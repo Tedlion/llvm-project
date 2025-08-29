@@ -45,24 +45,23 @@ const Matcher<Decl> FunctionDeclMatcher =
 // const Matcher<Stmt> DeclRefExprMatcher =
 //     traverse(TK_IgnoreUnlessSpelledInSource, declRefExpr().bind(DeclRefExprID));
 
-template <typename NodeType>
-concept PrettyDumpNode =
-    requires(const NodeType &Node, const ASTContext &Context)
-    {
-      Node.dumpPretty(Context);
-    };
+// template <typename NodeType>
+// concept PrettyDumpNode =
+//     requires(const NodeType &Node, const ASTContext &Context)
+//     {
+//       Node.dumpPretty(Context);
+//     };
 
 
 decltype(DeclScanner::PPTokens)::const_iterator
-DeclScanner::findTokenAt(SourceLocation Loc) const {
-  auto it = std::lower_bound(
+DeclScanner::findTokenOrAfter(SourceLocation Loc) const {
+  auto It = std::lower_bound(
       PPTokens.begin(), PPTokens.end(), Loc,
-      [](const auto& pair, const SourceLocation& target) {
-        return pair.first < target;
+      [](const auto& Pair, const SourceLocation& Target) {
+        return Pair.first < Target;
       });
 
-  assert(it != PPTokens.end() && it->first == Loc);
-  return it;
+  return It;
 }
 
 
@@ -79,9 +78,10 @@ static Range getRangeFromAssociated(const CharSourceRange &CSR,
 hash_code DeclScanner::getTokenHash(SourceRange SR) const {
   hash_code Hash(0);
   const Preprocessor &PP = CI->getPreprocessor();
-  const SourceManager &SM = PP.getSourceManager();
+  // const SourceManager &SM = PP.getSourceManager();
 
-  auto It = findTokenAt(SR.getBegin());
+  auto It = findTokenOrAfter(SR.getBegin());
+  assert(It != PPTokens.end() && It->first == SR.getBegin());
 
   while (true) {
     const auto &[Loc, Tok] = *It;
@@ -184,65 +184,73 @@ expandOnLocations(const SmallSet<SourceLocation, 3> &ExpansionLocs,
 #endif
 
 
-static CharSourceRange getFullRange(SourceRange SR, const SourceManager &SM,
-                                    const LangOptions &LangOpts) {
+CharSourceRange DeclScanner::getFullRange(SourceRange SR) const{
+  const SourceManager &SM = CI->getSourceManager();
+  const LangOptions &LangOpts = CI->getLangOpts();
+
   // llvm::errs() << "SourceRange: " << SR.printToString(SM) << "\n";
   CharSourceRange Range = CharSourceRange::getCharRange(SR);
   if (SR.getBegin().isMacroID())
     Range.setBegin(SM.getExpansionLoc(SR.getBegin()));
   SourceLocation End = SR.getEnd();
+
+  CharSourceRange ExpansionRange = SM.getExpansionRange(SR.getBegin());
+
   if (End.isMacroID()) {
-    CharSourceRange ExpansionRange = SM.getExpansionRange(SR.getEnd());
     End = ExpansionRange.getEnd();
+
   }
 
-  End = Lexer::getLocForEndOfToken(End, 0, SM, LangOpts);
+  // End = Lexer::getLocForEndOfToken(End, 0, SM, LangOpts);
+  //
+  // std::pair<FileID, unsigned> LocInfo = SM.getDecomposedLoc(End);
+  // bool Invalid = false;
+  // StringRef Buffer = SM.getBufferData(LocInfo.first, &Invalid);
+  //
+  // if (Invalid) {
+  //   Range.setEnd(End);
+  //   // llvm::errs() << "Buffer Invalid, Full Range: " << Range.getAsRange().
+  //   //     printToString(SM) << "\n";
+  //   return Range;
+  // }
+  //
+  // Token Tok;
+  // const char *StrData = Buffer.data() + LocInfo.second;
+  // Lexer TheLexer(SM.getLocForStartOfFile(LocInfo.first), LangOpts,
+  //                Buffer.begin(), StrData, Buffer.end());
+  // TheLexer.SetCommentRetentionState(true);
+  //
+  // while (!TheLexer.LexFromRawLexer(Tok)) {
+  //   // llvm::errs() << "Token: " << Tok.getName() << " at "
+  //   //     << Tok.getLocation().printToString(SM) << "\n";
+  //   if (Tok.is(tok::semi) || Tok.is(tok::comment)) {
+  //     End = Tok.getEndLoc();
+  //   } else {
+  //     break;
+  //   }
+  // }
+  //
+  // StrData = Buffer.data() + SM.getFileOffset(End);
+  //
+  // while (true) {
+  //   if (isHorizontalWhitespace(*StrData)) {
+  //     ++StrData;
+  //     End = End.getLocWithOffset(1);
+  //   } else if (isVerticalWhitespace(*StrData)) {
+  //     ++StrData;
+  //     End = End.getLocWithOffset(1);
+  //     break;
+  //   } else {
+  //     break;
+  //   }
+  // }
+  //
+  // Range.setEnd(End);
 
-  std::pair<FileID, unsigned> LocInfo = SM.getDecomposedLoc(End);
-  bool Invalid = false;
-  StringRef Buffer = SM.getBufferData(LocInfo.first, &Invalid);
+  llvm::errs() << "ExpansionRange: " <<
+    ExpansionRange.getAsRange().printToString(SM) <<      "\n";
 
-  if (Invalid) {
-    Range.setEnd(End);
-    // llvm::errs() << "Buffer Invalid, Full Range: " << Range.getAsRange().
-    //     printToString(SM) << "\n";
-    return Range;
-  }
-
-  Token Tok;
-  const char *StrData = Buffer.data() + LocInfo.second;
-  Lexer TheLexer(SM.getLocForStartOfFile(LocInfo.first), LangOpts,
-                 Buffer.begin(), StrData, Buffer.end());
-  TheLexer.SetCommentRetentionState(true);
-
-  while (!TheLexer.LexFromRawLexer(Tok)) {
-    // llvm::errs() << "Token: " << Tok.getName() << " at "
-    //     << Tok.getLocation().printToString(SM) << "\n";
-    if (Tok.is(tok::semi) || Tok.is(tok::comment)) {
-      End = Tok.getEndLoc();
-    } else {
-      break;
-    }
-  }
-
-  StrData = Buffer.data() + SM.getFileOffset(End);
-
-  while (true) {
-    if (isHorizontalWhitespace(*StrData)) {
-      ++StrData;
-      End = End.getLocWithOffset(1);
-    } else if (isVerticalWhitespace(*StrData)) {
-      ++StrData;
-      End = End.getLocWithOffset(1);
-      break;
-    } else {
-      break;
-    }
-  }
-
-  Range.setEnd(End);
-  // llvm::errs() << "Full Range: " << Range.getAsRange().printToString(SM) <<
-  //     "\n";
+  llvm::errs() << "FullRange: " << Range.getAsRange().printToString(SM) << "\n";
   return Range;
 }
 
@@ -380,16 +388,13 @@ std::optional<DeclEntry> DeclScanner::getDeclEntry(
   const SourceManager &SM = *Result.SourceManager;
   DeclEntry DE;
 
-  // RD.dump();
   SourceRange SR = RD.getSourceRange();
-  // SR.print(llvm::errs(), SM);
-  // llvm::errs() << "\n";
+  RD.dump();
+  SR.print(llvm::errs(), SM);
+  llvm::errs() << "\n";
 
   DE.Name = RD.getName().str();
   DE.IsUnnamed = DE.Name.empty();
-  FileID FID = SM.getFileID(RD.getBeginLoc());
-  const FileEntry *Entry = SM.getFileEntryForID(FID);
-  DE.SourcePath = Entry->tryGetRealPathName().str();
 
   DE.Kind = RD.getKind();
   DE.RecordID = &RD;
@@ -399,8 +404,9 @@ std::optional<DeclEntry> DeclScanner::getDeclEntry(
 
   // if (SBegin.isMacroID() || SEnd.isMacroID())
   if (AssociatedRange.isInvalid())
-    AssociatedRange = getFullRange(SR, SM, CI->getLangOpts());
+    AssociatedRange = getFullRange(SR);
 
+  DE.SourcePath = SM.getFilename(AssociatedRange.getBegin());
   DE.ToRemove = getRangeFromAssociated(AssociatedRange, SM);
   if (DE.IsDefinition)
     TypeDependencyVisitor::scanOn(
@@ -426,6 +432,7 @@ void DeclScanner::fillDeclEntry(DeclEntry &DE,
   // SourceLocation SEnd = SR.getEnd();
 
   CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
+  assert(AssociatedRange.isValid());
   DE.AddToClass = getRangeFromAssociated(AssociatedRange, SM);
   DE.ImplHash = getTokenHash(SR);
 }
@@ -568,7 +575,7 @@ std::optional<DeclEntry> DeclScanner::getDeclEntry(
 
   CharSourceRange AssociatedRange = getAssociatedRange(TD, *Result.Context);
   if (AssociatedRange.isInvalid())
-    AssociatedRange = getFullRange(TD.getSourceRange(), SM, CI->getLangOpts());
+    AssociatedRange = getFullRange(TD.getSourceRange());
   DE.ToRemove = getRangeFromAssociated(AssociatedRange, SM);
   return DE;
 }
@@ -636,23 +643,22 @@ bool DeclScanner::handleBeginSource(CompilerInstance &Compiler) {
   const SourceManager &SM = Compiler.getSourceManager();
   CurrentFile = SM.getMainFileID();
   StringRef FileName = SM.getFilename(SM.getLocForStartOfFile(CurrentFile));
+  PPTokens.clear();
 
-  if (FileName.ends_with(".i")) {
-    Preprocessor & PP = Compiler.getPreprocessor();
-    PP.setTokenWatcher([this](const Token &Tok) {
-      SourceLocation Loc = Tok.getLocation();
-      FileID FID = CI->getSourceManager().getFileID(Loc);
+  // FIXME: we need to tokens in sources and headers.
+  Preprocessor & PP = Compiler.getPreprocessor();
+  PP.setTokenWatcher([this](const Token &Tok) {
+    SourceLocation Loc = Tok.getLocation();
+    FileID FID = CI->getSourceManager().getFileID(Loc);
 
-      if (CurrentFile != FID)
-        return;
+    if (CurrentFile != FID)
+      return;
 
-      if (!PPTokens.empty()) {
-        assert(PPTokens.back().first < Loc);
-      }
+    if (!PPTokens.empty())
+      assert(PPTokens.back().first < Loc);
 
-      PPTokens.emplace_back(Loc, Tok);
-    });
-  }
+    PPTokens.emplace_back(Loc, Tok);
+  });
 
   // using namespace std::filesystem;
   // RelativeCurrentFilePath = relative(path(CurrentFilePath),
@@ -704,7 +710,7 @@ static bool generatePreprocessed(const CompilationDatabase &Compilations,
 }
 
 
-FixedCompilationDatabase getPreprocessedCompilations(
+static FixedCompilationDatabase getPreprocessedCompilations(
     const CompilationDatabase &Compilations,
     StringRef OriginalPath, StringRef PreprocessedPath) {
   std::vector Commands = Compilations.getCompileCommands(OriginalPath);
