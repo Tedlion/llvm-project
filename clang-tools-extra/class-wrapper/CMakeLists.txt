@@ -20,6 +20,7 @@ add_clang_library(classWrapper
         ClassWrapperContext.cpp
         MacroExpansionRecorder.cpp
         Support.cpp
+        ExpansionAssociatedRange.cpp
 )
 
 clang_target_link_libraries(classWrapper
