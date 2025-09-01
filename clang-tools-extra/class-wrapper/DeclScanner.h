@@ -61,8 +61,8 @@ struct StringDenseMapInfo {
 enum class EditKind {
   Invalid,
   InsertClassName,
-  InsertTypedefName,
-  InsertVarDeclName,
+  // InsertTypedefName,
+  // InsertVarDeclName,
 };
 
 class EditLocation {
@@ -378,9 +378,11 @@ private:
     CurrentEntryIndex++;
   }
 
-  hash_code getTokenHash(SourceRange SR) const;
+  hash_code getTokenHash(const Decl& D) const;
 
-  CharSourceRange getFullRange(SourceRange SR) const;
+  void findClassnameInsertions(CharSourceRange TypedefRange,
+                               SmallVectorImpl<EditLocation> &EditLocations)
+  const;
 };
 
 

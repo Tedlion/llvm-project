@@ -6,6 +6,7 @@
 
 #include "DeclScanner.h"
 #include "Support.h"
+#include "ExpansionAssociatedRange.h"
 
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/FrontendActions.h"
@@ -57,7 +58,7 @@ decltype(DeclScanner::PPTokens)::const_iterator
 DeclScanner::findTokenOrAfter(SourceLocation Loc) const {
   auto It = std::lower_bound(
       PPTokens.begin(), PPTokens.end(), Loc,
-      [](const auto& Pair, const SourceLocation& Target) {
+      [](const auto &Pair, const SourceLocation &Target) {
         return Pair.first < Target;
       });
 
@@ -66,7 +67,7 @@ DeclScanner::findTokenOrAfter(SourceLocation Loc) const {
 
 
 static Range getRangeFromAssociated(const CharSourceRange &CSR,
-                              const SourceManager &SM) {
+                                    const SourceManager &SM) {
   unsigned Begin = SM.getFileOffset(CSR.getBegin());
   unsigned End = SM.getFileOffset(CSR.getEnd());
   return Range(Begin, End - Begin);
@@ -75,23 +76,44 @@ static Range getRangeFromAssociated(const CharSourceRange &CSR,
 
 // Ignoring spaces, newlines, comments, and tabs when getting the Hash
 // Attention: cannot handle macro expansion
-hash_code DeclScanner::getTokenHash(SourceRange SR) const {
+hash_code DeclScanner::getTokenHash(const Decl &D) const {
   hash_code Hash(0);
   const Preprocessor &PP = CI->getPreprocessor();
-  // const SourceManager &SM = PP.getSourceManager();
+  const SourceManager &SM = PP.getSourceManager();
 
-  auto It = findTokenOrAfter(SR.getBegin());
-  assert(It != PPTokens.end() && It->first == SR.getBegin());
+  auto It = findTokenOrAfter(D.getBeginLoc());
+  assert(It != PPTokens.end() && It->first == D.getBeginLoc());
 
-  while (true) {
+  SourceLocation EndLoc = D.getEndLoc();
+
+  for (auto &Attr : D.attrs()) {
+    SourceRange AttrRange = Attr->getRange();
+    if (AttrRange.isValid() && AttrRange.getEnd() > EndLoc)
+      EndLoc = AttrRange.getEnd();
+  }
+
+  for (;; ++It) {
     const auto &[Loc, Tok] = *It;
+    if (Tok.is(tok::comment))
+      continue;
     std::string TokSpelling = PP.getSpelling(Tok);
     // llvm::errs() << "Hash token: '" << TokSpelling << "' at "
-    // << Loc.printToString(SM) << " " << Loc.getRawEncoding() << "\n";
+    //     << Loc.printToString(SM) << " " << Loc.getRawEncoding() << "\n";
     Hash = hash_combine(Hash, TokSpelling);
-    if (Loc == SR.getEnd())
+    if (Loc == EndLoc)
       break;
-    ++It;
+  }
+
+  // Handle tail attributes
+  ++It;
+  for (; It != PPTokens.end(); ++It) {
+    const auto &[Loc, Tok] = *It;
+    if (Tok.isNot(tok::r_paren) && Tok.isNot(tok::r_square))
+      break;
+    std::string TokSpelling = PP.getSpelling(Tok);
+    // llvm::errs() << "Hash token: '" << TokSpelling << "' at "
+    //     << Loc.printToString(SM) << " " << Loc.getRawEncoding() << "\n";
+    Hash = hash_combine(Hash, TokSpelling);
   }
 
   // llvm::errs() << "Hash:" << hash_value(Hash) << "\n";
@@ -118,8 +140,8 @@ static bool checkExpansion(SourceRange AssociatedRange,
                               NameLoc.printToString(SM), NameLoc.isMacroID());
   PresumedLoc PresumedBegin = SM.getPresumedLoc(AssociatedBegin);
   llvm::errs() << "PresumedBegin: " << PresumedBegin.getFilename()
-               << ":" << PresumedBegin.getLine() << ":"
-               << PresumedBegin.getColumn() << "\n";
+      << ":" << PresumedBegin.getLine() << ":"
+      << PresumedBegin.getColumn() << "\n";
 
   if (AssociatedBegin.isMacroID()) {
     SourceLocation ExpansionLoc = SM.getExpansionLoc(AssociatedBegin);
@@ -158,17 +180,12 @@ class ExpansionTokenReader {
   SourceLocation CurrentLoc;
 
 public:
-  Token getToken(){
+  Token getToken() {}
 
-  }
-
-  StringRef getText() {
-
-  }
+  StringRef getText() {}
 };
 
 } // namespace
-
 
 
 static std::tuple<std::string/*Expansion*/,
@@ -181,10 +198,9 @@ expandOnLocations(const SmallSet<SourceLocation, 3> &ExpansionLocs,
   hash_code Hash(0);
   SmallVector<unsigned, 4> Offsets;
 }
-#endif
 
 
-CharSourceRange DeclScanner::getFullRange(SourceRange SR) const{
+CharSourceRange DeclScanner::getFullRange(SourceRange SR) const {
   const SourceManager &SM = CI->getSourceManager();
   const LangOptions &LangOpts = CI->getLangOpts();
 
@@ -201,77 +217,35 @@ CharSourceRange DeclScanner::getFullRange(SourceRange SR) const{
 
   }
 
-  // End = Lexer::getLocForEndOfToken(End, 0, SM, LangOpts);
-  //
-  // std::pair<FileID, unsigned> LocInfo = SM.getDecomposedLoc(End);
-  // bool Invalid = false;
-  // StringRef Buffer = SM.getBufferData(LocInfo.first, &Invalid);
-  //
-  // if (Invalid) {
-  //   Range.setEnd(End);
-  //   // llvm::errs() << "Buffer Invalid, Full Range: " << Range.getAsRange().
-  //   //     printToString(SM) << "\n";
-  //   return Range;
-  // }
-  //
-  // Token Tok;
-  // const char *StrData = Buffer.data() + LocInfo.second;
-  // Lexer TheLexer(SM.getLocForStartOfFile(LocInfo.first), LangOpts,
-  //                Buffer.begin(), StrData, Buffer.end());
-  // TheLexer.SetCommentRetentionState(true);
-  //
-  // while (!TheLexer.LexFromRawLexer(Tok)) {
-  //   // llvm::errs() << "Token: " << Tok.getName() << " at "
-  //   //     << Tok.getLocation().printToString(SM) << "\n";
-  //   if (Tok.is(tok::semi) || Tok.is(tok::comment)) {
-  //     End = Tok.getEndLoc();
-  //   } else {
-  //     break;
-  //   }
-  // }
-  //
-  // StrData = Buffer.data() + SM.getFileOffset(End);
-  //
-  // while (true) {
-  //   if (isHorizontalWhitespace(*StrData)) {
-  //     ++StrData;
-  //     End = End.getLocWithOffset(1);
-  //   } else if (isVerticalWhitespace(*StrData)) {
-  //     ++StrData;
-  //     End = End.getLocWithOffset(1);
-  //     break;
-  //   } else {
-  //     break;
-  //   }
-  // }
-  //
-  // Range.setEnd(End);
-
   llvm::errs() << "ExpansionRange: " <<
-    ExpansionRange.getAsRange().printToString(SM) <<      "\n";
+      ExpansionRange.getAsRange().printToString(SM) << "\n";
 
   llvm::errs() << "FullRange: " << Range.getAsRange().printToString(SM) << "\n";
   return Range;
 }
+#endif
 
 
 static void printTypeRef(const std::string &Name) {
   // llvm::errs() << "get Type: " << Name << "\n";
 }
 
+
 namespace {
 class TypeDependencyVisitor
     : public RecursiveASTVisitor<TypeDependencyVisitor> {
 public:
   using ResultCallback =
-    std::function<void(const std::string &, const RefEntry &)>;
+  std::function<void(const std::string &, const RefEntry &)>;
 
-  static void scanOn(QualType Type, const ResultCallback & Callback) {
+
+  static void scanOn(QualType Type, const ResultCallback &Callback) {
     TypeDependencyVisitor Visitor(Callback);
     Visitor.TraverseType(Type);
   }
 
-  static void scanOn(const Decl &D, const ResultCallback & Callback) {
+
+  static void scanOn(const Decl &D, const ResultCallback &Callback) {
     TypeDependencyVisitor Visitor(Callback);
     Visitor.TraverseDecl(const_cast<Decl *>(&D));
   }
@@ -302,7 +276,7 @@ public:
   }
 
 
-  bool VisitElaboratedType(ElaboratedType * ET) {
+  bool VisitElaboratedType(ElaboratedType *ET) {
     // llvm::errs() << std::format("Visiting ElaboratedType: {} {}\n",
     //                         ET->getNamedType().getAsString(),
     //                         static_cast<void *>(ET));
@@ -340,7 +314,8 @@ private:
 
   SmallSet<RecordDecl *, 4> EnclosureRecords;
 
-  bool hasPointeeIndependent(const PointerType * PT) {
+
+  bool hasPointeeIndependent(const PointerType *PT) {
     QualType Pointee = PT->getPointeeType();
     const Type *PointeeType = Pointee.getTypePtr();
 
@@ -365,13 +340,12 @@ private:
 } // namespace
 
 
-
 std::optional<DeclEntry> DeclScanner::getDeclEntry(
     const MatchFinder::MatchResult &Result, const RecordDecl &RD) {
   // FIXME: Not all RecordDecl in local scope can be ignored,  for a local
   //  RecordDecl with function pointer field, an edition of transferring it to
   //  member function pointer is required.
-  const DeclContext * DC = RD.getDeclContext();
+  const DeclContext *DC = RD.getDeclContext();
   if (DC->isFunctionOrMethod()) {
     return std::nullopt;
   }
@@ -389,9 +363,9 @@ std::optional<DeclEntry> DeclScanner::getDeclEntry(
   DeclEntry DE;
 
   SourceRange SR = RD.getSourceRange();
-  RD.dump();
-  SR.print(llvm::errs(), SM);
-  llvm::errs() << "\n";
+  // RD.dump();
+  // SR.print(llvm::errs(), SM);
+  // llvm::errs() << "\n";
 
   DE.Name = RD.getName().str();
   DE.IsUnnamed = DE.Name.empty();
@@ -400,11 +374,8 @@ std::optional<DeclEntry> DeclScanner::getDeclEntry(
   DE.RecordID = &RD;
   DE.IsUnion = RD.isUnion();
   DE.IsDefinition = RD.isCompleteDefinition();
-  CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
-
-  // if (SBegin.isMacroID() || SEnd.isMacroID())
-  if (AssociatedRange.isInvalid())
-    AssociatedRange = getFullRange(SR);
+  CharSourceRange AssociatedRange = getExpansionAssociatedRange(
+      RD, *Result.Context);
 
   DE.SourcePath = SM.getFilename(AssociatedRange.getBegin());
   DE.ToRemove = getRangeFromAssociated(AssociatedRange, SM);
@@ -427,19 +398,20 @@ void DeclScanner::fillDeclEntry(DeclEntry &DE,
     return;
 
   const SourceManager &SM = *Result.SourceManager;
-  SourceRange SR = RD.getSourceRange();
+  // SourceRange SR = RD.getSourceRange();
   // SourceLocation SBegin = SR.getBegin();
   // SourceLocation SEnd = SR.getEnd();
 
   CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
   assert(AssociatedRange.isValid());
   DE.AddToClass = getRangeFromAssociated(AssociatedRange, SM);
-  DE.ImplHash = getTokenHash(SR);
+  DE.ImplHash = getTokenHash(RD);
 }
 
 
 #if 0
-static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type* T);
+static std::optional<std::pair<std::string, RefEntry> > getDependent(
+    const Type *T);
 
 static std::optional<std::pair<std::string, RefEntry> > getDependent(
     const QualType &QT) {
@@ -447,7 +419,8 @@ static std::optional<std::pair<std::string, RefEntry> > getDependent(
 }
 
 
-static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type* T) {
+static std::optional<std::pair<std::string, RefEntry> > getDependent(
+    const Type *T) {
   if (!T)
     return std::nullopt;
   // FIXME: not working on the canonical type
@@ -455,9 +428,9 @@ static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type* 
   if (isa<BuiltinType>(T))
     return std::nullopt;
 
-  if (const auto * PT= dyn_cast<PointerType>(T)) {
+  if (const auto *PT = dyn_cast<PointerType>(T)) {
     const QualType Pointee = PT->getPointeeType();
-    const Type * PointeeType = Pointee.getTypePtr();
+    const Type *PointeeType = Pointee.getTypePtr();
 
     if (!PointeeType)
       return std::nullopt;
@@ -476,9 +449,9 @@ static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type* 
     return getDependent(PointeeType);
   }
 
-  if (const auto * AT = dyn_cast<ArrayType>(T)) {
+  if (const auto *AT = dyn_cast<ArrayType>(T)) {
     const QualType ElementType = AT->getElementType();
-    const Type * ElementTypePtr = ElementType.getTypePtr();
+    const Type *ElementTypePtr = ElementType.getTypePtr();
 
     if (!ElementTypePtr)
       return std::nullopt;
@@ -486,8 +459,9 @@ static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type* 
     return getDependent(ElementTypePtr);
   }
 
-  if (const auto * Elaborated = dyn_cast<ElaboratedType>(T)) {
-    llvm::errs() << "ElaboratedType: " << Elaborated->getNamedType().getAsString() << "\n";
+  if (const auto *Elaborated = dyn_cast<ElaboratedType>(T)) {
+    llvm::errs() << "ElaboratedType: " << Elaborated->getNamedType().
+        getAsString() << "\n";
     return std::make_pair(
         Elaborated->getNamedType().getAsString(),
         RefEntry{Decl::Kind::Typedef, Range(0, 0)});
@@ -497,48 +471,66 @@ static std::optional<std::pair<std::string, RefEntry>> getDependent(const Type* 
 }
 #endif
 
-static void findClassnameInsertions(
-    StringRef TypeName, SmallVectorImpl<EditLocation> &EditLocations) {
+void DeclScanner::findClassnameInsertions(
+    CharSourceRange TypedefRange,
+    SmallVectorImpl<EditLocation> &EditLocations) const {
   // We need to turn all function pointer to member function pointer,
   // by inserting the class name specifier before the '*' which represent
   // the function pointer type.
   // There may be multiple insertion locations, for the types of a function's
   // return and parameters can also be function pointers.
   //  e.g. The type name may be `int (*(*(*[10])(int))(foo_t (**)(int)))()`
-  size_t From = 0;
-  while (true) {
-    From = TypeName.find("(*", From);
-    if (From == StringRef::npos)
+  SourceManager &SM = CI->getSourceManager();
+  SourceLocation Begin = TypedefRange.getBegin();
+  SourceLocation End = TypedefRange.getEnd();
+  unsigned BeginOffset = SM.getFileOffset(Begin);
+  bool LastIsLParen = false;
+
+  for (auto It = findTokenOrAfter(Begin); It != PPTokens.end(); ++It) {
+    const auto &[Loc, Tok] = *It;
+    if (Loc > End)
       break;
 
-    EditLocations.emplace_back(EditKind::InsertClassName, From + 1);
-    From += 2;
+    if (Tok.is(tok::l_paren)) {
+      LastIsLParen = true;
+      continue;
+    }
+
+    if (LastIsLParen && Tok.is(tok::star)) {
+      unsigned Offset = SM.getFileOffset(Loc);
+      // To insert just before the '*'
+      EditLocations.emplace_back(EditKind::InsertClassName,
+                                 Offset - BeginOffset);
+    }
+
+    LastIsLParen = false;
+
   }
 }
 
 
-static EditLocation findArrayNameInsertion(StringRef TypeName) {
-  return {EditKind::InsertTypedefName,
-          static_cast<unsigned>(TypeName.find('[', 0))};
-}
+// static EditLocation findArrayNameInsertion(StringRef TypeName) {
+//   return {EditKind::InsertTypedefName,
+//           static_cast<unsigned>(TypeName.find('[', 0))};
+// }
 
 
-static EditLocation findFunctionPtrNameInsertion(StringRef TypeName) {
-  // A function pointer typedef may be like
-  // `typedef int (*(*(*name)(int))(foo_t (**)(int)))()`
-  // The first part is always an identifier name which represent the final
-  // return type, i.e.`int` in the above case.
-  // No parentheses shall be found in the first part.
-  // Then there will be continuous "(*" before the type name.
-  size_t Pos = TypeName.find("(*", 0);
-  do { Pos += 2; } while (TypeName[Pos] == '(');
-  return {EditKind::InsertTypedefName, static_cast<unsigned>(Pos)};
-}
+// static EditLocation findFunctionPtrNameInsertion(StringRef TypeName) {
+//   // A function pointer typedef may be like
+//   // `typedef int (*(*(*name)(int))(foo_t (**)(int)))()`
+//   // The first part is always an identifier name which represent the final
+//   // return type, i.e.`int` in the above case.
+//   // No parentheses shall be found in the first part.
+//   // Then there will be continuous "(*" before the type name.
+//   size_t Pos = TypeName.find("(*", 0);
+//   do { Pos += 2; } while (TypeName[Pos] == '(');
+//   return {EditKind::InsertTypedefName, static_cast<unsigned>(Pos)};
+// }
 
 
 static QualType removeArray(QualType QT) {
   while (const auto *AT = dyn_cast<ArrayType>(QT.getTypePtr())) {
-    QT =  AT->getElementType();
+    QT = AT->getElementType();
   }
   return QT;
 }
@@ -549,7 +541,7 @@ std::optional<DeclEntry> DeclScanner::getDeclEntry(
   // FIXME: Not all TypedefDecls in local scope can be ignored,  for a local
   //  typedef on function pointer, an edition of transferring it to member
   //  function pointer is required.
-  const DeclContext * DC = TD.getDeclContext();
+  const DeclContext *DC = TD.getDeclContext();
   if (DC->isFunctionOrMethod()) {
     return std::nullopt;
   }
@@ -560,22 +552,21 @@ std::optional<DeclEntry> DeclScanner::getDeclEntry(
 
   DeclEntry DE;
   DE.Name = TD.getName();
-  FileID FID = SM.getFileID(TD.getBeginLoc());
-  const FileEntry *Entry = SM.getFileEntryForID(FID);
-  DE.SourcePath = Entry->tryGetRealPathName().str();  DE.Kind = TD.getKind();
+  CharSourceRange AssociatedRange = getExpansionAssociatedRange(
+      TD, *Result.Context);
+  DE.SourcePath = SM.getFilename(AssociatedRange.getBegin());
   DE.Kind = TD.getKind();
 
   // Sometimes a RecordDecl is wrapped in a TypedefDecl,
   // we check that with Range and the RecordID.
   QualType UnderlyingType = TD.getUnderlyingType();
   QualType RemoveArrayType = removeArray(UnderlyingType);
-  if (const ElaboratedType * ET = dyn_cast<ElaboratedType>(RemoveArrayType.getTypePtr()))
-    if (const RecordType * RT = dyn_cast<RecordType>(ET->getNamedType().getTypePtr()))
+  if (const ElaboratedType *ET = dyn_cast<ElaboratedType>(
+      RemoveArrayType.getTypePtr()))
+    if (const RecordType *RT = dyn_cast<RecordType>(
+        ET->getNamedType().getTypePtr()))
       DE.RecordID = RT->getDecl();
 
-  CharSourceRange AssociatedRange = getAssociatedRange(TD, *Result.Context);
-  if (AssociatedRange.isInvalid())
-    AssociatedRange = getFullRange(TD.getSourceRange());
   DE.ToRemove = getRangeFromAssociated(AssociatedRange, SM);
   return DE;
 }
@@ -590,20 +581,6 @@ void DeclScanner::fillDeclEntry(
   QualType UnderlyingType = TD.getUnderlyingType();
   CharSourceRange AssociatedRange = getAssociatedRange(TD, *Result.Context);
 
-  std::string Expansion = UnderlyingType.getAsString();
-  findClassnameInsertions(Expansion, DE.EditLocations);
-
-  // FunctionPtr or FunctionPtr Array
-  bool WithFunctionPtr = !DE.EditLocations.empty();
-
-  if (isa<ArrayType>(UnderlyingType.getTypePtr())) {
-    DE.IsArray = true;
-    DE.EditLocations.emplace_back(findArrayNameInsertion(Expansion));
-  } else if (WithFunctionPtr) {
-    DE.IsFunctionPtr = true;
-    DE.EditLocations.emplace_back(findFunctionPtrNameInsertion(Expansion));
-  }
-
   TypeDependencyVisitor::scanOn(
       UnderlyingType,
       [&DE](const std::string &Name, const RefEntry &Ref) {
@@ -611,24 +588,31 @@ void DeclScanner::fillDeclEntry(
           DE.ImplRefs.try_emplace(Name, Ref);
       });
 
-  // The FullRange is the range to remove the typedef from the original source
-  // Generating new does not rely on the old source.
+  DE.AddToClass = getRangeFromAssociated(AssociatedRange, SM);
 
+  // std::string Expansion = UnderlyingType.getAsString();
+  findClassnameInsertions(AssociatedRange, DE.EditLocations);
 
-  // DE.FullRange = getRangeFromAssociated(AssociatedRange, SM);
+  // FunctionPtr or FunctionPtr Array
+  bool WithFunctionPtr = !DE.EditLocations.empty();
+
+  if (isa<ArrayType>(UnderlyingType.getTypePtr())) {
+    DE.IsArray = true;
+  } else if (WithFunctionPtr) {
+    DE.IsFunctionPtr = true;
+  }
 
   llvm::sort(DE.EditLocations);
+  DE.ImplHash = getTokenHash(TD);
 }
 
 
 void DeclScanner::postHandleNode(const MatchFinder::MatchResult &Result,
-                                 const RecordDecl &RD, DeclEntry &Entry) {
-
-}
+                                 const RecordDecl &RD, DeclEntry &Entry) {}
 
 
-DeclScanner::DeclScanner(StringRef Target, const std::string& SourceFile,
-  const std::function<bool(StringRef)> & NeedWrapping)
+DeclScanner::DeclScanner(StringRef Target, const std::string &SourceFile,
+                         const std::function<bool(StringRef)> &NeedWrapping)
   : Target(Target), SourceFile(SourceFile), NeedWrapping(NeedWrapping) {
 
   // SourceFinder.addMatcher(RecordDeclMatcher, &RecordDeclHandler);
@@ -642,11 +626,14 @@ bool DeclScanner::handleBeginSource(CompilerInstance &Compiler) {
 
   const SourceManager &SM = Compiler.getSourceManager();
   CurrentFile = SM.getMainFileID();
-  StringRef FileName = SM.getFilename(SM.getLocForStartOfFile(CurrentFile));
   PPTokens.clear();
 
-  // FIXME: we need to tokens in sources and headers.
-  Preprocessor & PP = Compiler.getPreprocessor();
+  StringRef FileName = SM.getFilename(SM.getLocForStartOfFile(CurrentFile));
+  if (!FileName.ends_with(".i"))
+    return true;
+
+  // Is the tokens in source and headers necessary?
+  Preprocessor &PP = Compiler.getPreprocessor();
   PP.setTokenWatcher([this](const Token &Tok) {
     SourceLocation Loc = Tok.getLocation();
     FileID FID = CI->getSourceManager().getFileID(Loc);
@@ -770,7 +757,7 @@ void DeclScanner::run(StringRef Target, StringRef Filename,
   Scanner.enableAllMatchers();
 
   SourceTool.run(
-    newFrontendActionFactory(&Scanner.SourceFinder, &Scanner).get());
+      newFrontendActionFactory(&Scanner.SourceFinder, &Scanner).get());
 
   FixedCompilationDatabase PPCompilations =
       getPreprocessedCompilations(Compilations, Filename, PreprocessedPath);
