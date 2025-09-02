@@ -10,7 +10,6 @@
 
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/FrontendActions.h"
-#include "clang/Lex/Lexer.h"
 #include "clang/Tooling/Tooling.h"
 #include "clang/Tooling/Transformer/SourceCode.h"
 
@@ -79,7 +78,7 @@ static Range getRangeFromAssociated(const CharSourceRange &CSR,
 hash_code DeclScanner::getTokenHash(const Decl &D) const {
   hash_code Hash(0);
   const Preprocessor &PP = CI->getPreprocessor();
-  const SourceManager &SM = PP.getSourceManager();
+  // const SourceManager &SM = PP.getSourceManager();
 
   auto It = findTokenOrAfter(D.getBeginLoc());
   assert(It != PPTokens.end() && It->first == D.getBeginLoc());
@@ -121,132 +120,39 @@ hash_code DeclScanner::getTokenHash(const Decl &D) const {
 }
 
 
-#if 0
-static bool checkExpansion(SourceRange AssociatedRange,
-                           SourceLocation NameLoc, const SourceManager &SM,
-                           const CompilerInstance &CI,
-                           const MacroExpansionRecorder &MacroRecorder,
-                           std::string &Expansion, Range Replaced) {
-  SourceLocation AssociatedBegin = AssociatedRange.getBegin();
-  SourceLocation AssociatedEnd = AssociatedRange.getEnd();
-
-  llvm::errs() << std::format("AssociatedBegin: {} {}\n"
-                              "AssociatedEnd: {} {}\n"
-                              "NameBegin: {} {}\n",
-                              AssociatedBegin.printToString(SM),
-                              AssociatedBegin.isMacroID(),
-                              AssociatedEnd.printToString(SM),
-                              AssociatedEnd.isMacroID(),
-                              NameLoc.printToString(SM), NameLoc.isMacroID());
-  PresumedLoc PresumedBegin = SM.getPresumedLoc(AssociatedBegin);
-  llvm::errs() << "PresumedBegin: " << PresumedBegin.getFilename()
-      << ":" << PresumedBegin.getLine() << ":"
-      << PresumedBegin.getColumn() << "\n";
-
-  if (AssociatedBegin.isMacroID()) {
-    SourceLocation ExpansionLoc = SM.getExpansionLoc(AssociatedBegin);
-    llvm::errs() << "AssociatedBegin ExpansionLoc: "
-        << ExpansionLoc.printToString(SM) << "\n";
-    std::optional<StringRef> ExpansionText = MacroRecorder.getExpandedText(
-        ExpansionLoc);
-    if (ExpansionText) {
-      llvm::errs() << "AssociatedBegin Expansion: " << *ExpansionText << "\n";
-      return true;
-    } else {
-      llvm::errs() << "AssociatedBegin Expansion not found\n";
-    }
+// We need to get a name for the EnumDecl, it may be referenced later
+// Enum must have at least one EnumConstantDecl, so we "Borrow" the first
+// EnumConstantDecl's name if the EnumDecl is unnamed.
+// Note the EnumConstantDecl is exposed to out scope, so there won't be
+// a name conflict.
+static std::pair<StringRef, bool/*Borrowed*/> getNameOrBorrowed(
+    const EnumDecl &ED) {
+  bool Borrowed = false;
+  StringRef Name = ED.getName();
+  if (Name.empty()) {
+    Borrowed = true;
+    const EnumConstantDecl *ECD = *ED.enumerator_begin();
+    Name = ECD->getName();
   }
-
-  // if (AssociatedBegin.isMacroID() || AssociatedEnd.isMacroID() || NameLoc.
-  //     isMacroID()) {
-  //   CharSourceRange ExpansionRange = SM.getExpansionRange(AssociatedRange);
-  //   llvm::errs() << "ExpansionRange: " << ExpansionRange.getAsRange().printToString(SM) << "\n";
-  //   StringRef ExpansionText = Lexer::getSourceText(ExpansionRange, SM, CI.getLangOpts());
-  //   llvm::errs() << "ExpansionText: " << ExpansionText << "\n";
-  //   return true;
-  // }
-
-  return false;
+  return {Name, Borrowed};
 }
 
 
 namespace {
-
-class ExpansionTokenReader {
-  std::string ExpansionText;
-  SourceLocation Begin;
-  SourceLocation End;
-  SourceLocation TextBegin;
-  SourceLocation CurrentLoc;
-
-public:
-  Token getToken() {}
-
-  StringRef getText() {}
-};
-
-} // namespace
-
-
-static std::tuple<std::string/*Expansion*/,
-                  hash_code, SmallVector<unsigned, 4>/*Offsets*/>
-expandOnLocations(const SmallSet<SourceLocation, 3> &ExpansionLocs,
-                  SourceLocation HashBegin, SourceLocation HashEnd,
-                  const SmallVectorImpl<SourceLocation> &OffsetQueries,
-                  const SourceManager &SM) {
-  std::string Expansion;
-  hash_code Hash(0);
-  SmallVector<unsigned, 4> Offsets;
-}
-
-
-CharSourceRange DeclScanner::getFullRange(SourceRange SR) const {
-  const SourceManager &SM = CI->getSourceManager();
-  const LangOptions &LangOpts = CI->getLangOpts();
-
-  // llvm::errs() << "SourceRange: " << SR.printToString(SM) << "\n";
-  CharSourceRange Range = CharSourceRange::getCharRange(SR);
-  if (SR.getBegin().isMacroID())
-    Range.setBegin(SM.getExpansionLoc(SR.getBegin()));
-  SourceLocation End = SR.getEnd();
-
-  CharSourceRange ExpansionRange = SM.getExpansionRange(SR.getBegin());
-
-  if (End.isMacroID()) {
-    End = ExpansionRange.getEnd();
-
-  }
-
-  llvm::errs() << "ExpansionRange: " <<
-      ExpansionRange.getAsRange().printToString(SM) << "\n";
-
-  llvm::errs() << "FullRange: " << Range.getAsRange().printToString(SM) << "\n";
-  return Range;
-}
-#endif
-
-
-static void printTypeRef(const std::string &Name) {
-  // llvm::errs() << "get Type: " << Name << "\n";
-}
-
-
-namespace {
-class TypeDependencyVisitor
-    : public RecursiveASTVisitor<TypeDependencyVisitor> {
+class DependencyVisitor : public RecursiveASTVisitor<DependencyVisitor> {
 public:
   using ResultCallback =
   std::function<void(const std::string &, const RefEntry &)>;
 
 
   static void scanOn(QualType Type, const ResultCallback &Callback) {
-    TypeDependencyVisitor Visitor(Callback);
+    DependencyVisitor Visitor(Callback);
     Visitor.TraverseType(Type);
   }
 
 
   static void scanOn(const Decl &D, const ResultCallback &Callback) {
-    TypeDependencyVisitor Visitor(Callback);
+    DependencyVisitor Visitor(Callback);
     Visitor.TraverseDecl(const_cast<Decl *>(&D));
   }
 
@@ -275,12 +181,44 @@ public:
     return true;
   }
 
+  bool VisitValueDecl(ValueDecl *VD) {
+    DeclContext * DC = VD->getDeclContext();
+    // avoid record local varDecl
+    if (DC->isFunctionOrMethod())
+      return true;
+
+    llvm::errs() << std::format("Record ValueDecl: {} {}\n", VD->getName(),
+                                static_cast<void *>(VD));
+    EnclosureVars.insert(VD);
+    return true;
+  }
+
+
+
+  // bool TraverseCStyleCastExpr(CStyleCastExpr *E, DataRecursionQueue *Queue = nullptr) {
+  //   return RecursiveASTVisitor::TraverseCStyleCastExpr(E, Queue);
+  // }
+
+
+  // bool TraverseEnumConstantDecl(EnumConstantDecl *ECD) {
+  //   llvm::errs() << std::format("Visiting EnumConstantDecl: {}\n",
+  //                           ECD->getName());
+  //   return RecursiveASTVisitor::TraverseEnumConstantDecl(ECD);
+  // }
+
+
+  // bool VisitTypeLoc(TypeLoc TL) {
+  //   llvm::errs() << std::format("Visiting TypeLoc: {}\n",
+  //                           TL.getType().getAsString());
+  //   return true;
+  // }
+
 
   bool VisitElaboratedType(ElaboratedType *ET) {
     // llvm::errs() << std::format("Visiting ElaboratedType: {} {}\n",
     //                         ET->getNamedType().getAsString(),
     //                         static_cast<void *>(ET));
-    if (const RecordType *RT = dyn_cast<RecordType>(
+    if (const auto *RT = dyn_cast<RecordType>(
         ET->getNamedType().getTypePtr()))
       if (RecordDecl *RD = RT->getDecl()) {
         if (!RD->getIdentifier())
@@ -302,17 +240,39 @@ public:
     std::string Name = ET->getNamedType().getAsString();
     if (ET->getKeyword() != ElaboratedTypeKeyword::None)
       Name = Name.substr(Name.find(' ') + 1);
-    printTypeRef(Name);
+    //llvm::errs() << "get Type: " << Name << "\n";
     Callback(Name, RefEntry{Decl::Kind::Typedef, Range(0, 0)});
+    return true;
+  }
+
+
+  bool VisitDeclRefExpr(DeclRefExpr *DRE) {
+    const ValueDecl *VD = DRE->getDecl();
+    const DeclContext *DC = VD->getDeclContext();
+    if (DC->isFunctionOrMethod())
+      return true;
+    if (EnclosureVars.contains(VD))
+      return true;
+    std::string Name;
+    if (const auto *ECD = dyn_cast<EnumConstantDecl>(VD)) {
+      const EnumDecl *ED = llvm::dyn_cast<EnumDecl>(ECD->getDeclContext());
+      Name = getNameOrBorrowed(*ED).first;
+    } else {
+      Name = VD->getName().str();
+    }
+
+    llvm::errs() << "get DeclRef: " << Name << "\n";
+    Callback(Name, RefEntry{VD->getKind(), Range(0, 0)});
     return true;
   }
 
 private:
   ResultCallback Callback;
 
-  explicit TypeDependencyVisitor(const ResultCallback &CB) : Callback(CB) {}
+  explicit DependencyVisitor(const ResultCallback &CB) : Callback(CB) {}
 
   SmallSet<RecordDecl *, 4> EnclosureRecords;
+  SmallSet<ValueDecl *, 4> EnclosureVars;
 
 
   bool hasPointeeIndependent(const PointerType *PT) {
@@ -362,7 +322,7 @@ std::optional<DeclEntry> DeclScanner::getDeclEntry(
   const SourceManager &SM = *Result.SourceManager;
   DeclEntry DE;
 
-  SourceRange SR = RD.getSourceRange();
+  // SourceRange SR = RD.getSourceRange();
   // RD.dump();
   // SR.print(llvm::errs(), SM);
   // llvm::errs() << "\n";
@@ -380,7 +340,7 @@ std::optional<DeclEntry> DeclScanner::getDeclEntry(
   DE.SourcePath = SM.getFilename(AssociatedRange.getBegin());
   DE.ToRemove = getRangeFromAssociated(AssociatedRange, SM);
   if (DE.IsDefinition)
-    TypeDependencyVisitor::scanOn(
+    DependencyVisitor::scanOn(
         RD, [&DE](const std::string &Name, const RefEntry &Ref) {
           DE.ImplRefs.try_emplace(Name, Ref);
         });
@@ -402,7 +362,8 @@ void DeclScanner::fillDeclEntry(DeclEntry &DE,
   // SourceLocation SBegin = SR.getBegin();
   // SourceLocation SEnd = SR.getEnd();
 
-  CharSourceRange AssociatedRange = getAssociatedRange(RD, *Result.Context);
+  CharSourceRange AssociatedRange = getExpansionAssociatedRange(
+      RD, *Result.Context);
   assert(AssociatedRange.isValid());
   DE.AddToClass = getRangeFromAssociated(AssociatedRange, SM);
   DE.ImplHash = getTokenHash(RD);
@@ -579,9 +540,10 @@ void DeclScanner::fillDeclEntry(
 
   const SourceManager &SM = *Result.SourceManager;
   QualType UnderlyingType = TD.getUnderlyingType();
-  CharSourceRange AssociatedRange = getAssociatedRange(TD, *Result.Context);
+  CharSourceRange AssociatedRange = getExpansionAssociatedRange(
+      TD, *Result.Context);
 
-  TypeDependencyVisitor::scanOn(
+  DependencyVisitor::scanOn(
       UnderlyingType,
       [&DE](const std::string &Name, const RefEntry &Ref) {
         if (Name != DE.Name) // there is a self-ref sugar name?
@@ -604,6 +566,52 @@ void DeclScanner::fillDeclEntry(
 
   llvm::sort(DE.EditLocations);
   DE.ImplHash = getTokenHash(TD);
+}
+
+
+
+std::optional<DeclEntry> DeclScanner::getDeclEntry(
+    const MatchFinder::MatchResult &Result, const EnumDecl &ED) {
+  const DeclContext *DC = ED.getDeclContext();
+  if (DC->isFunctionOrMethod()) {
+    return std::nullopt;
+  }
+
+  const SourceManager &SM = *Result.SourceManager;
+  DeclEntry DE;
+
+  auto [EnumName, Borrowed] = getNameOrBorrowed(ED);
+  DE.Name = EnumName;
+  DE.IsUnnamed = Borrowed;
+
+  CharSourceRange AssociatedRange = getExpansionAssociatedRange(
+      ED, *Result.Context);
+  DE.SourcePath = SM.getFilename(AssociatedRange.getBegin());
+  DE.Kind = ED.getKind();
+  DE.ToRemove = getRangeFromAssociated(AssociatedRange, SM);
+
+  // EnumDecl is always a definition (forward declaration is not allowed in std)
+  DE.IsDefinition = true;
+
+  DependencyVisitor::scanOn(
+      ED, [&DE](const std::string &Name, const RefEntry &Ref) {
+        DE.ImplRefs.try_emplace(Name, Ref);
+      });
+
+  return DE;
+}
+
+
+void DeclScanner::fillDeclEntry(DeclEntry &DE,
+                                const MatchFinder::MatchResult &Result,
+                                const EnumDecl &ED) {
+  auto [Name, Borrowed] = getNameOrBorrowed(ED);
+  assert(DE.Name == Name);
+
+  const SourceManager &SM = *Result.SourceManager;
+  DE.AddToClass = getRangeFromAssociated(
+      getExpansionAssociatedRange(ED, *Result.Context), SM);
+  DE.ImplHash = getTokenHash(ED);
 }
 
 
