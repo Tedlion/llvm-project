@@ -173,7 +173,7 @@ static std::string getLocationStr(
 }
 
 
-static void checkTypeRef(
+static void checkRefs(
     const DeclEntry::MapType &Map, ArrayRef<StringRef> Expected,
     const source_location &Location = source_location::current()) {
   std::string LocationStr = getLocationStr(Location);
@@ -183,7 +183,7 @@ static void checkTypeRef(
     ASSERT_TRUE(It != Map.end()) << std::format(
                                     "'{}' not found{}", Type.str(),
                                     LocationStr);
-    EXPECT_EQ(It->second.Kind, Decl::Kind::Typedef) << LocationStr;
+    // EXPECT_EQ(It->second.Kind, Decl::Kind::Typedef) << LocationStr;
   }
 }
 
@@ -217,7 +217,7 @@ typedef volatile unsigned long long * const ull_pt;
 )c";
 
 
-TEST_F(TypedefDeclTest, SimpleTypedef) {
+TEST_F(TypedefDeclTest, Simple) {
   ASSERT_TRUE(scanOnCode(SimpleTypedef));
   ASSERT_EQ(getResult().size(), 4);
 
@@ -227,7 +227,7 @@ TEST_F(TypedefDeclTest, SimpleTypedef) {
   EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
   checkToRemove(D1, "typedef int int_t;\n");
   checkAddToClass(D1, "typedef int int_t;\n");
-  checkTypeRef(D1.ImplRefs, {});
+  checkRefs(D1.ImplRefs, {});
   EXPECT_EQ(D1.ImplHash, getHashForStringList({"typedef", "int", "int_t"}));
 
   const auto &D2 = getResult()[1];
@@ -235,7 +235,7 @@ TEST_F(TypedefDeclTest, SimpleTypedef) {
   EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
   checkToRemove(D2, "typedef short * short_pt;\n");
   checkAddToClass(D2, "typedef short * short_pt;\n");
-  checkTypeRef(D2.ImplRefs, {});
+  checkRefs(D2.ImplRefs, {});
   EXPECT_EQ(D2.ImplHash,
             getHashForStringList( {"typedef", "short", "*", "short_pt"}));
 
@@ -244,7 +244,7 @@ TEST_F(TypedefDeclTest, SimpleTypedef) {
   EXPECT_EQ(D3.Kind, Decl::Kind::Typedef);
   checkToRemove(D3, "typedef char ** char_p2t;\n");
   checkAddToClass(D3, "typedef char ** char_p2t;\n");
-  checkTypeRef(D3.ImplRefs, {});
+  checkRefs(D3.ImplRefs, {});
   EXPECT_EQ(D3.ImplHash, getHashForStringList(
               {"typedef", "char", "*", "*", "char_p2t"}));
 
@@ -252,7 +252,7 @@ TEST_F(TypedefDeclTest, SimpleTypedef) {
   EXPECT_EQ(D4.Name, "ull_pt");
   checkToRemove(D4, "typedef volatile unsigned long long * const ull_pt;\n");
   checkAddToClass(D4, "typedef volatile unsigned long long * const ull_pt;\n");
-  checkTypeRef(D4.ImplRefs, {});
+  checkRefs(D4.ImplRefs, {});
   EXPECT_EQ(D4.ImplHash, getHashForStringList( {"typedef", "volatile",
               "unsigned", "long", "long", "*", "const", "ull_pt"}));
 }
@@ -266,7 +266,7 @@ typedef bar_p foo_p;
 )c";
 
 
-TEST_F(TypedefDeclTest, TypedefOnCustomType) {
+TEST_F(TypedefDeclTest, OnCustomType) {
   ASSERT_TRUE(scanOnCode(TypedefOnCustomType));
   ASSERT_EQ(getResult().size(), 4);
 
@@ -275,28 +275,28 @@ TEST_F(TypedefDeclTest, TypedefOnCustomType) {
   EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
   checkToRemove(D1, "typedef int foo_t;\n");
   checkAddToClass(D1, "typedef int foo_t;\n");
-  checkTypeRef(D1.ImplRefs, {});
+  checkRefs(D1.ImplRefs, {});
 
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "bar_t");
   EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
   checkToRemove(D2, "typedef foo_t bar_t;\n");
   checkAddToClass(D2, "typedef foo_t bar_t;\n");
-  checkTypeRef(D2.ImplRefs, {"foo_t"});
+  checkRefs(D2.ImplRefs, {"foo_t"});
 
   const auto &D3 = getResult()[2];
   EXPECT_EQ(D3.Name, "bar_p");
   EXPECT_EQ(D3.Kind, Decl::Kind::Typedef);
   checkToRemove(D3, "typedef bar_t * bar_p;\n");
   checkAddToClass(D3, "typedef bar_t * bar_p;\n");
-  checkTypeRef(D3.ImplRefs, {"bar_t"});
+  checkRefs(D3.ImplRefs, {"bar_t"});
 
   const auto &D4 = getResult()[3];
   EXPECT_EQ(D4.Name, "foo_p");
   EXPECT_EQ(D4.Kind, Decl::Kind::Typedef);
   checkToRemove(D4, "typedef bar_p foo_p;\n");
   checkAddToClass(D4, "typedef bar_p foo_p;\n");
-  checkTypeRef(D4.ImplRefs, {"bar_p"});
+  checkRefs(D4.ImplRefs, {"bar_p"});
 }
 
 
@@ -309,7 +309,7 @@ typedef void_p2 void_p3;
 )c";
 
 
-TEST_F(TypedefDeclTest, TypedefOnVoidPtr) {
+TEST_F(TypedefDeclTest, OnVoidPtr) {
   ASSERT_TRUE(scanOnCode(TypedefOnVoidPtr));
   ASSERT_EQ(getResult().size(), 5);
 
@@ -317,31 +317,31 @@ TEST_F(TypedefDeclTest, TypedefOnVoidPtr) {
   EXPECT_EQ(D1.Name, "void_t");
   checkToRemove(D1, "typedef void void_t;\n");
   checkAddToClass(D1, "typedef void void_t;\n");
-  checkTypeRef(D1.ImplRefs, {});
+  checkRefs(D1.ImplRefs, {});
 
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "void_p");
   checkToRemove(D2, "typedef void * void_p;\n");
   checkAddToClass(D2, "typedef void * void_p;\n");
-  checkTypeRef(D2.ImplRefs, {});
+  checkRefs(D2.ImplRefs, {});
 
   const auto &D3 = getResult()[2];
   EXPECT_EQ(D3.Name, "void_t2");
   checkToRemove(D3, "typedef void_t void_t2;\n");
   checkAddToClass(D3, "typedef void_t void_t2;\n");
-  checkTypeRef(D3.ImplRefs, {"void_t"});
+  checkRefs(D3.ImplRefs, {"void_t"});
 
   const auto &D4 = getResult()[3];
   EXPECT_EQ(D4.Name, "void_p2");
   checkToRemove(D4, "typedef void_t2 * void_p2;\n");
   checkAddToClass(D4, "typedef void_t2 * void_p2;\n");
-  checkTypeRef(D4.ImplRefs, {"void_t2"});
+  checkRefs(D4.ImplRefs, {"void_t2"});
 
   const auto &D5 = getResult()[4];
   EXPECT_EQ(D5.Name, "void_p3");
   checkToRemove(D5, "typedef void_p2 void_p3;\n");
   checkAddToClass(D5, "typedef void_p2 void_p3;\n");
-  checkTypeRef(D5.ImplRefs, {"void_p2"});
+  checkRefs(D5.ImplRefs, {"void_p2"});
 }
 
 
@@ -356,7 +356,7 @@ typedef a_t bar_t;
 )c";
 
 
-TEST_F(TypedefDeclTest, TypedefOnArray) {
+TEST_F(TypedefDeclTest, OnArray) {
   ASSERT_TRUE(scanOnCode(TypedefOnArray));
   ASSERT_EQ(getResult().size(), 7);
 
@@ -364,42 +364,42 @@ TEST_F(TypedefDeclTest, TypedefOnArray) {
   EXPECT_EQ(D2.Name, "a_t");
   checkToRemove(D2, "typedef foo_t a_t[];\n");
   checkAddToClass(D2, "typedef foo_t a_t[];\n");
-  checkTypeRef(D2.ImplRefs, {"foo_t"});
+  checkRefs(D2.ImplRefs, {"foo_t"});
   checkEditLocations(D2, {});
 
   const auto &D3 = getResult()[2];
   EXPECT_EQ(D3.Name, "a1_t");
   checkToRemove(D3, "typedef foo_t a1_t[10];\n");
   checkAddToClass(D3, "typedef foo_t a1_t[10];\n");
-  checkTypeRef(D3.ImplRefs, {"foo_t"});
+  checkRefs(D3.ImplRefs, {"foo_t"});
   checkEditLocations(D3, {});
 
   const auto &D4 = getResult()[3];
   EXPECT_EQ(D4.Name, "a2_t");
   checkToRemove(D4, "typedef foo_t a2_t[][20];\n");
   checkAddToClass(D4, "typedef foo_t a2_t[][20];\n");
-  checkTypeRef(D4.ImplRefs, {"foo_t"});
+  checkRefs(D4.ImplRefs, {"foo_t"});
   checkEditLocations(D4, {});
 
   const auto &D5 = getResult()[4];
   EXPECT_EQ(D5.Name, "a3_t");
   checkToRemove(D5, "typedef foo_t a3_t[10][20];\n");
   checkAddToClass(D5, "typedef foo_t a3_t[10][20];\n");
-  checkTypeRef(D5.ImplRefs, {"foo_t"});
+  checkRefs(D5.ImplRefs, {"foo_t"});
   checkEditLocations(D5, {});
 
   const auto &D6 = getResult()[5];
   EXPECT_EQ(D6.Name, "a1_p_t");
   checkToRemove(D6, "typedef foo_t * a1_p_t[][10];\n");
   checkAddToClass(D6, "typedef foo_t * a1_p_t[][10];\n");
-  checkTypeRef(D6.ImplRefs, {"foo_t"});
+  checkRefs(D6.ImplRefs, {"foo_t"});
   checkEditLocations(D6, {});
 
   const auto &D7 = getResult()[6];
   EXPECT_EQ(D7.Name, "bar_t");
   checkToRemove(D7, "typedef a_t bar_t;\n");
   checkAddToClass(D7, "typedef a_t bar_t;\n");
-  checkTypeRef(D7.ImplRefs, {"a_t"});
+  checkRefs(D7.ImplRefs, {"a_t"});
   checkEditLocations(D7, {});
 }
 
@@ -413,7 +413,7 @@ typedef struct S * S_p;
 )c";
 
 
-TEST_F(TypedefDeclTest, TypedefOnStruct) {
+TEST_F(TypedefDeclTest, OnStruct) {
   ASSERT_TRUE(scanOnCode(TypedefOnStruct));
   ASSERT_EQ(getResult().size(), 2);
 
@@ -422,7 +422,7 @@ TEST_F(TypedefDeclTest, TypedefOnStruct) {
   EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
   checkToRemove(D1, "typedef struct S S_t;\n");
   checkAddToClass(D1, "typedef struct S S_t;\n");
-  checkTypeRef(D1.ImplRefs, {"S"});
+  checkRefs(D1.ImplRefs, {"S"});
 
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "S_p");
@@ -430,7 +430,7 @@ TEST_F(TypedefDeclTest, TypedefOnStruct) {
   checkToRemove(D2, "typedef struct S * S_p;\n");
   checkAddToClass(D2, "typedef struct S * S_p;\n");
   // Note: struct S in not necessary for S_p, since it is used as a pointer
-  checkTypeRef(D2.ImplRefs, {});
+  checkRefs(D2.ImplRefs, {});
 }
 
 
@@ -446,7 +446,7 @@ typedef struct S (*(*(*fptr7[10])(int))(foo_t (*[10])(int)))();
 )c";
 
 
-TEST_F(TypedefDeclTest, TypedefOnFunctionPtr) {
+TEST_F(TypedefDeclTest, OnFunctionPtr) {
   constexpr auto InsertClass = EditKind::InsertClassName;
 
   ASSERT_TRUE(scanOnCode(TypedefOnFunctionPtr));
@@ -457,7 +457,7 @@ TEST_F(TypedefDeclTest, TypedefOnFunctionPtr) {
   EXPECT_EQ(D1.Kind, Decl::Kind::Typedef);
   checkToRemove(D1, "typedef int (*(*fptr)(int))(int[5]);\n");
   checkAddToClass(D1, "typedef int (*(*fptr)(int))(int[5]);\n");
-  checkTypeRef(D1.ImplRefs, {});
+  checkRefs(D1.ImplRefs, {});
   checkEditLocations(D1, {EditLocation(InsertClass, 13),
                           EditLocation(InsertClass, 15)});
 
@@ -466,7 +466,7 @@ TEST_F(TypedefDeclTest, TypedefOnFunctionPtr) {
   EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
   checkToRemove(D2, "typedef int (*(*fptr2)(int))(foo_t (*[10])(int));\n");
   checkAddToClass(D2, "typedef int (*(*fptr2)(int))(foo_t (*[10])(int));\n");
-  checkTypeRef(D2.ImplRefs, {"foo_t"});
+  checkRefs(D2.ImplRefs, {"foo_t"});
   checkEditLocations(D2, {EditLocation(InsertClass, 13),
                           EditLocation(InsertClass, 15),
                           EditLocation(InsertClass, 36)});
@@ -477,7 +477,7 @@ TEST_F(TypedefDeclTest, TypedefOnFunctionPtr) {
   checkToRemove(D3, "typedef int (*(*fptr3[10])(int))(foo_t (*[10])(int));\n");
   checkAddToClass(
       D3, "typedef int (*(*fptr3[10])(int))(foo_t (*[10])(int));\n");
-  checkTypeRef(D3.ImplRefs, {"foo_t"});
+  checkRefs(D3.ImplRefs, {"foo_t"});
   checkEditLocations(D3, {EditLocation(InsertClass, 13),
                           EditLocation(InsertClass, 15),
                           EditLocation(InsertClass, 40)});
@@ -489,7 +489,7 @@ TEST_F(TypedefDeclTest, TypedefOnFunctionPtr) {
       D4, "typedef int (*(*(*fptr4[10])(int))(foo_t (*[10])(int)))();\n");
   checkAddToClass(
       D4, "typedef int (*(*(*fptr4[10])(int))(foo_t (*[10])(int)))();\n");
-  checkTypeRef(D4.ImplRefs, {"foo_t"});
+  checkRefs(D4.ImplRefs, {"foo_t"});
   checkEditLocations(D4, {EditLocation(InsertClass, 13),
                           EditLocation(InsertClass, 15),
                           EditLocation(InsertClass, 17),
@@ -501,7 +501,7 @@ TEST_F(TypedefDeclTest, TypedefOnFunctionPtr) {
   EXPECT_EQ(D5.Kind, Decl::Kind::Typedef);
   checkToRemove(D5, "typedef int (*(*fptr5[10])(int))(fptr2[8]);\n");
   checkAddToClass(D5, "typedef int (*(*fptr5[10])(int))(fptr2[8]);\n");
-  checkTypeRef(D5.ImplRefs, {"fptr2"});
+  checkRefs(D5.ImplRefs, {"fptr2"});
   checkEditLocations(D5, {EditLocation(InsertClass, 13),
                           EditLocation(InsertClass, 15)});
 
@@ -514,7 +514,7 @@ TEST_F(TypedefDeclTest, TypedefOnFunctionPtr) {
   checkAddToClass(
       D6,
       "typedef int (*(*(*fptr6[10])(int))(foo_t (*[10])(int)))(struct S);\n");
-  checkTypeRef(D6.ImplRefs, {"foo_t", "S"});
+  checkRefs(D6.ImplRefs, {"foo_t", "S"});
   checkEditLocations(D6, {EditLocation(InsertClass, 13),
                           EditLocation(InsertClass, 15),
                           EditLocation(InsertClass, 17),
@@ -527,7 +527,7 @@ TEST_F(TypedefDeclTest, TypedefOnFunctionPtr) {
       D7, "typedef struct S (*(*(*fptr7[10])(int))(foo_t (*[10])(int)))();\n");
   checkAddToClass(
       D7, "typedef struct S (*(*(*fptr7[10])(int))(foo_t (*[10])(int)))();\n");
-  checkTypeRef(D7.ImplRefs, {"foo_t", "S"});
+  checkRefs(D7.ImplRefs, {"foo_t", "S"});
   checkEditLocations(D7, {EditLocation(InsertClass, 18),
                           EditLocation(InsertClass, 20),
                           EditLocation(InsertClass, 22),
@@ -542,7 +542,7 @@ void func() {
 )c";
 
 
-TEST_F(TypedefDeclTest, TypedefInLocalScope) {
+TEST_F(TypedefDeclTest, InLocalScope) {
   ASSERT_TRUE(scanOnCode(TypedefInLocalScope));
   ASSERT_EQ(getResult().size(), 0);
 }
@@ -555,7 +555,7 @@ DEFINE_TYPEDEF(my_int_t, int, v)
 )c";
 
 
-TEST_F(TypedefDeclTest, TypedefFromMacro) {
+TEST_F(TypedefDeclTest, FromMacro) {
   ASSERT_TRUE(scanOnCode(TypedefFromMacro));
   ASSERT_EQ(getResult().size(), 1);
 
@@ -565,7 +565,7 @@ TEST_F(TypedefDeclTest, TypedefFromMacro) {
   EXPECT_EQ(D.Kind, Decl::Kind::Typedef);
   checkToRemove(D, "DEFINE_TYPEDEF(my_int_t, int, v)\n");
   checkAddToClass(D, "typedef int my_int_t;");
-  checkTypeRef(D.ImplRefs, {});
+  checkRefs(D.ImplRefs, {});
   EXPECT_EQ(D.ImplHash, getHashForStringList({"typedef", "int", "my_int_t"}));
 }
 
@@ -982,7 +982,7 @@ TEST_F(RecordDeclTest, StructRelyOnTypes) {
   ASSERT_EQ(getResult().size(), 1);
 
   const auto &D = getResult().front();
-  checkTypeRef(D.ImplRefs, {"foo_t", "bar_t"});
+  checkRefs(D.ImplRefs, {"foo_t", "bar_t"});
 }
 
 
@@ -1007,7 +1007,7 @@ TEST_F(RecordDeclTest, NestedStructRelyOnTypes) {
   ASSERT_EQ(getResult().size(), 1);
 
   const auto &D = getResult().front();
-  checkTypeRef(D.ImplRefs, {"foo_t", "bar_t"});
+  checkRefs(D.ImplRefs, {"foo_t", "bar_t"});
 }
 
 
@@ -1040,7 +1040,7 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   checkAddToClass(D1, "struct S {", "} S_t;\n");
   EXPECT_EQ(D1.ImplHash, getHashForStringList(
               {"struct", "S", "{", "int", "a", ";" , "}"}));
-  checkTypeRef(D1.ImplRefs, {});
+  checkRefs(D1.ImplRefs, {});
 
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "S_t");
@@ -1048,7 +1048,7 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   EXPECT_EQ(D2.RecordID, D1.RecordID);
   checkToRemove(D2, "typedef struct S {", "} S_t;\n");
   checkAddToClass(D2, "typedef struct S {", "} S_t;\n");
-  checkTypeRef(D2.ImplRefs, {"S"});
+  checkRefs(D2.ImplRefs, {"S"});
 
   const auto &D3 = getResult()[2];
   EXPECT_EQ(D3.Name, "");
@@ -1059,7 +1059,7 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   checkAddToClass(D3, "struct {", "} S2_t;\n");
   EXPECT_EQ(D3.ImplHash, getHashForStringList(
               {"struct", "{", "short", "b", ";", "}"}));
-  checkTypeRef(D3.ImplRefs, {});
+  checkRefs(D3.ImplRefs, {});
 
   const auto &D4 = getResult()[3];
   EXPECT_EQ(D4.Name, "S2_t");
@@ -1067,12 +1067,12 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   EXPECT_EQ(D4.RecordID, D3.RecordID);
   checkToRemove(D4, "typedef struct {", "} S2_t;\n");
   checkAddToClass(D4, "typedef struct {", "} S2_t;\n");
-  checkTypeRef(D4.ImplRefs, {});
+  checkRefs(D4.ImplRefs, {});
 
   const auto &D5 = getResult()[4];
   EXPECT_EQ(D5.Name, "S2_t2");
   EXPECT_EQ(D5.RecordID, nullptr);
-  checkTypeRef(D5.ImplRefs, {"S2_t"});
+  checkRefs(D5.ImplRefs, {"S2_t"});
 
   const auto &D6 = getResult()[5];
   EXPECT_EQ(D6.Name, "");
@@ -1090,7 +1090,121 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   EXPECT_EQ(D7.RecordID, D6.RecordID);
   checkToRemove(D7, "typedef struct {", "} Sa_t[][10];\n");
   checkAddToClass(D7, "typedef struct {", "} Sa_t[][10];\n");
-  checkTypeRef(D7.ImplRefs, {});
+  checkRefs(D7.ImplRefs, {});
 }
+
+
+class EnumDeclTest : public MatcherTest {
+protected:
+  void SetUp() override {
+    MatcherTest::SetUp();
+    enableMatcher<EnumDecl>();
+  }
+};
+
+
+static StringRef SimpleEnum = R"c(
+enum E { E1, E2=2, E3 = E2 + 10};
+)c";
+
+
+TEST_F(EnumDeclTest, Simple) {
+  ASSERT_TRUE(scanOnCode(SimpleEnum));
+  ASSERT_EQ(getResult().size(), 1);
+
+  const auto &D = getResult().front();
+
+  EXPECT_EQ(D.Name, "E");
+  EXPECT_EQ(D.Kind, Decl::Kind::Enum);
+  checkToRemove(D, SimpleEnum.ltrim());
+  checkAddToClass(D, SimpleEnum.ltrim());
+
+  EXPECT_EQ(D.InfHash, hash_code(0));
+  EXPECT_EQ(D.ImplHash, getHashForStringList(
+              {"enum", "E", "{", "E1", ",", "E2", "=", "2", ",", "E3", "=",
+              "E2", "+", "10", "}"} ));
+
+  EXPECT_TRUE(D.IsDefinition);
+  EXPECT_FALSE(D.IsInline);
+  EXPECT_FALSE(D.IsUnnamed);
+  EXPECT_FALSE(D.IsUnion);
+}
+
+
+static StringRef EnumInLocalScope = R"c(
+void func() {
+  enum E { E1, E2=2, E3 = E2 + 10};
+}
+)c";
+
+
+TEST_F(EnumDeclTest, InLocalScope) {
+  ASSERT_TRUE(scanOnCode(EnumInLocalScope));
+  // local enum should be ignored
+  ASSERT_EQ(getResult().size(), 0);
+}
+
+
+static StringRef UnnamedEnum = R"c(
+enum { E1, E2=2, E3 = E2 + 10};
+)c";
+
+
+TEST_F(EnumDeclTest, Unnamed) {
+  ASSERT_TRUE(scanOnCode(UnnamedEnum));
+  ASSERT_EQ(getResult().size(), 1);
+
+  const auto &D = getResult().front();
+
+  // Using the name of the first enumerator as the name of the enum.
+  // Then it can be referred to on usage.
+  EXPECT_TRUE(D.IsUnnamed);
+  EXPECT_EQ(D.Name, "E1");
+
+  EXPECT_EQ(D.Kind, Decl::Kind::Enum);
+  checkToRemove(D, UnnamedEnum.ltrim());
+  checkAddToClass(D, UnnamedEnum.ltrim());
+
+  EXPECT_EQ(D.InfHash, hash_code(0));
+  EXPECT_EQ(D.ImplHash, getHashForStringList(
+              {"enum", "{", "E1", ",", "E2", "=", "2", ",", "E3", "=", "E2",
+              "+", "10", "}"} ));
+}
+
+
+static StringRef EnumRelyOnTypesAndVars = R"c(
+typedef short foo_t;
+const int V = 1;
+enum Named {EV};
+enum {ENUM_VAL1 = 100, ENUM_VAL2 };
+enum E { E1 = (foo_t)V, E2=ENUM_VAL2, E3 = E2 + 10, E4 = EV};
+)c";
+
+
+TEST_F(EnumDeclTest, RelyOnTypesAndVars) {
+  ASSERT_TRUE(scanOnCode(EnumRelyOnTypesAndVars));
+  ASSERT_EQ(getResult().size(), 3);
+
+  const auto &D1 = getResult()[0];
+  EXPECT_EQ(D1.Name, "Named");
+  EXPECT_FALSE(D1.IsUnnamed);
+  checkRefs(D1.ImplRefs, {});
+
+
+  const auto &D2 = getResult()[1];
+  EXPECT_EQ(D2.Name, "ENUM_VAL1");
+  EXPECT_TRUE(D2.IsUnnamed);
+  checkRefs(D2.ImplRefs, {});
+
+  const auto &D3 = getResult()[2];
+  EXPECT_EQ(D3.Name, "E");
+  EXPECT_FALSE(D1.IsUnnamed);
+
+  // FIXME: 
+  // Note: we record the EnumDecl, not the EnumDeclConstants.
+  // "ENUM_VAL1" is a borrowed name for the unnamed enum
+  checkRefs(D3.ImplRefs, {"ENUM_VAL1", "foo_t", "V", "Named"});
+}
+
 
 } // namespace clang::class_wrapper

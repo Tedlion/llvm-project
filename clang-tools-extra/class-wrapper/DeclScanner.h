@@ -293,6 +293,7 @@ public:
   void enableAllMatchers() {
     enableMatcher<TypedefDecl>();
     enableMatcher<RecordDecl>();
+    enableMatcher<EnumDecl>();
   }
 
   [[nodiscard]] const std::vector<DeclEntry> &getDeclEntries() const {
@@ -337,11 +338,15 @@ private:
                                         const RecordDecl &RD);
   std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                         const TypedefDecl &TD);
+  std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
+                                        const EnumDecl &ED);
 
   void fillDeclEntry(DeclEntry &DE, const MatchFinder::MatchResult &Result,
                      const RecordDecl &RD);
   void fillDeclEntry(DeclEntry &DE, const MatchFinder::MatchResult &Result,
                      const TypedefDecl &TD);
+  void fillDeclEntry(DeclEntry &DE, const MatchFinder::MatchResult &Result,
+                     const EnumDecl &ED);
 
   template <typename NodeType>
   void onSourceMatch(const MatchFinder::MatchResult &Result) {
