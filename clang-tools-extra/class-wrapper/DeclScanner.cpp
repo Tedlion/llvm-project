@@ -299,12 +299,31 @@ private:
 
 } // namespace
 
+// Overlapping ranges of combined decls:
+// The clang AST is not with the same hierarchy with the standard grammar.
+// There is not an AST node for init-declarator-list, instead, the Decls are
+// individual nodes. There we be Decls with overlapped SourceRange.
+// For example, code "struct {int x, y;} s, (*fp2)(int x, int y);" will be
+// parsed as one RecordDecl, one VarDecl for "s", and one VarDecl for the
+// function pointer. As another instance, code "typedef struct {int x, y;} a, b;"
+// will be parsed as one RecordDecl and two TypedefDecls for "a" and b.
+//
+// It will not be a problem for removing overlapping ranges of Decls from the
+// source code, removing their union is fine. But adding the Decls to the class
+// is more complicated. We prefer to split the combined Decls, one declaration
+// (end with semicolon) for each Decl node, unless the Decl is
+// unnamed(RecordDecl). Unnamed RecordDecl can be combined with TypedefDecl
+// or VarDecl, which appear later in AST. When a TypedefDecl or VarDecl with a
+// unnamed RecordDecl is matched, we do am absorb action, which move the
+// AddToClass to the later entry.
+
 
 std::optional<DeclEntry> DeclScanner::getDeclEntry(
     const MatchFinder::MatchResult &Result, const RecordDecl &RD) {
-  // FIXME: Not all RecordDecl in local scope can be ignored,  for a local
-  //  RecordDecl with function pointer field, an edition of transferring it to
-  //  member function pointer is required.
+  // FIXME: Not all RecordDecl in local scope can be ignored:
+  //  1) for a local RecordDecl with function pointer field, an edition of
+  //  transferring it to member function pointer is required.
+  //  2) a local RecordDecl may be referenced by a static local variable.
   const DeclContext *DC = RD.getDeclContext();
   if (DC->isFunctionOrMethod()) {
     return std::nullopt;
@@ -612,6 +631,67 @@ void DeclScanner::fillDeclEntry(DeclEntry &DE,
   DE.AddToClass = getRangeFromAssociated(
       getExpansionAssociatedRange(ED, *Result.Context), SM);
   DE.ImplHash = getTokenHash(ED);
+}
+
+
+std::optional<DeclEntry> DeclScanner::getDeclEntry(
+    const MatchFinder::MatchResult &Result, const VarDecl &VD) {
+  const DeclContext *DC = VD.getDeclContext();
+  if (DC->isFunctionOrMethod() && !VD.isStaticLocal()) {
+    return std::nullopt;
+  }
+
+  const SourceManager &SM = *Result.SourceManager;
+  DeclEntry DE;
+
+  DE.Name = VD.getName();
+  DE.IsStatic = VD.getStorageClass() == SC_Static;
+  DE.Kind = VD.getKind();
+  DE.IsDefinition = VD.hasInit();
+  DE.IsExtern = VD.getStorageClass() == SC_Extern;
+
+  CharSourceRange AssociatedRange = getExpansionAssociatedRange(
+      VD, *Result.Context);
+  DE.SourcePath = SM.getFilename(AssociatedRange.getBegin());
+  DE.ToRemove = getRangeFromAssociated(AssociatedRange, SM);
+
+  return DE;
+}
+
+
+void DeclScanner::fillDeclEntry(DeclEntry &DE,
+                                const MatchFinder::MatchResult &Result,
+                                const VarDecl &VD) {
+  assert(DE.Name == VD.getName());
+
+  // Note: for the code "int x, y;", VarDecl "x" and VarDecl "y" are two
+  // individual nodes which do not have a "VarDeclList" parent.
+  // This means the AssociatedRange for later VarDecl contains the previous ones,
+  // which is acceptable for ToRemove but not for AddToClass.
+  // As a consequence, we need to construct the AddToClass range manually.
+  QualType VarType = VD.getType();
+  std::string TypeName = VarType.getAsString();
+  if (VD.hasInit()) {
+    std::string InitText;
+    raw_string_ostream OS(InitText);
+    VD.getInit()->dump(OS, *Result.Context);
+    DE.AddToClassText = std::format("{} {} = {};\n", TypeName, DE.Name, InitText);
+  } else {
+    DE.AddToClassText = std::format("{} {};\n", TypeName, DE.Name);
+  }
+  llvm::errs() << DE.AddToClassText;
+
+  // const SourceManager &SM = *Result.SourceManager;
+  // CharSourceRange AssociatedRange = getExpansionAssociatedRange(
+  //     VD, *Result.Context);
+  // DE.AddToClass = getRangeFromAssociated(AssociatedRange, SM);
+
+  DependencyVisitor::scanOn(
+      VD, [&DE](const std::string &Name, const RefEntry &Ref) {
+        DE.ImplRefs.try_emplace(Name, Ref);
+      });
+
+  DE.ImplHash = getTokenHash(VD);
 }
 
 
