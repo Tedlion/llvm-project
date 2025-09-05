@@ -143,14 +143,23 @@ protected:
 
 
   void checkAddToClass(const DeclEntry &DE, StringRef Expected) const {
-    EXPECT_TRUE(verifyRangeMatched(PreProcessed, DE.AddToClass, Expected));
+    if (DE.AddToClassText.empty()) {
+      EXPECT_TRUE(verifyRangeMatched(PreProcessed, DE.AddToClass, Expected));
+    } else {
+      EXPECT_EQ(DE.AddToClassText, Expected);
+    }
   }
 
 
   void checkAddToClass(const DeclEntry &DE, StringRef ExpectedBegin,
                        StringRef ExpectedEnd) const {
-    EXPECT_TRUE(verifyRangeMatched(PreProcessed, DE.AddToClass,
-      ExpectedBegin, ExpectedEnd));
+    if (DE.AddToClassText.empty()) {
+      EXPECT_TRUE(verifyRangeMatched(PreProcessed, DE.AddToClass,
+        ExpectedBegin, ExpectedEnd));
+    } else {
+      EXPECT_TRUE(DE.AddToClassText.starts_with(ExpectedBegin));
+      EXPECT_TRUE(DE.AddToClassText.ends_with(ExpectedEnd));
+    }
   }
 };
 
@@ -749,7 +758,7 @@ static StringRef AnonymousStructS = R"c(
 struct {
   int a;
   int b;
-};
+} s;
 )c";
 
 
@@ -1204,6 +1213,106 @@ TEST_F(EnumDeclTest, RelyOnTypesAndVars) {
   // Note: we record the EnumDecl, not the EnumDeclConstants.
   // "ENUM_VAL1" is a borrowed name for the unnamed enum
   checkRefs(D3.ImplRefs, {"ENUM_VAL1", "foo_t", "V", "Named"});
+}
+
+
+class VarDeclTest : public MatcherTest {
+protected:
+  void SetUp() override {
+    MatcherTest::SetUp();
+    enableMatcher<VarDecl>();
+  }
+};
+
+
+static StringRef SimpleVar = R"c(
+const int a;
+static unsigned b;
+void func() {
+  float c;
+  static double d;
+  extern char e;
+}
+)c";
+
+
+TEST_F(VarDeclTest, Simple) {
+  ASSERT_TRUE(scanOnCode(SimpleVar));
+  ASSERT_EQ(getResult().size(), 4);
+
+  const auto &D1 = getResult()[0];
+  EXPECT_EQ(D1.Name, "a");
+  EXPECT_EQ(D1.Kind, Decl::Kind::Var);
+  EXPECT_FALSE(D1.IsStatic);
+  EXPECT_FALSE(D1.IsExtern);
+  EXPECT_FALSE(D1.IsDefinition);
+  checkToRemove(D1, "const int a;\n");
+  checkAddToClass(D1, "const int a;\n");
+  checkRefs(D1.ImplRefs, {});
+  EXPECT_TRUE(D1.ImplHash == getHashForStringList({"const", "int", "a"}));
+
+  const auto &D2 = getResult()[1];
+  EXPECT_EQ(D2.Name, "b");
+  EXPECT_EQ(D2.Kind, Decl::Kind::Var);
+  EXPECT_TRUE(D2.IsStatic);
+  EXPECT_FALSE(D1.IsExtern);
+  EXPECT_FALSE(D1.IsDefinition);
+  checkToRemove(D2, "static unsigned b;\n");
+  checkAddToClass(D2, "unsigned int b;\n");
+  checkRefs(D2.ImplRefs, {});
+  EXPECT_TRUE(D2.ImplHash == getHashForStringList({"static", "unsigned", "b"}));
+
+  const auto &D3 = getResult()[2];
+  EXPECT_EQ(D3.Name, "d");
+  EXPECT_EQ(D3.Kind, Decl::Kind::Var);
+  EXPECT_TRUE(D3.IsStatic);
+  EXPECT_FALSE(D1.IsExtern);
+  EXPECT_FALSE(D1.IsDefinition);
+  checkToRemove(D3, "static double d;\n  ");
+  checkAddToClass(D3, "double d;\n");
+  checkRefs(D3.ImplRefs, {});
+  EXPECT_TRUE(D3.ImplHash == getHashForStringList({"static", "double", "d"}));
+
+  const auto &D4 = getResult()[3];
+  EXPECT_EQ(D4.Name, "e");
+  EXPECT_EQ(D4.Kind, Decl::Kind::Var);
+  EXPECT_FALSE(D4.IsStatic);
+  EXPECT_TRUE(D4.IsExtern);
+  EXPECT_FALSE(D4.IsDefinition);
+  checkToRemove(D4, "extern char e;\n");
+  checkAddToClass(D4, "char e;\n");
+  EXPECT_TRUE(D4.ImplHash == getHashForStringList({"extern", "char", "e"}));
+};
+
+
+static StringRef VarWithTypedefTypes = R"c(
+typedef int foo_t;
+foo_t a;
+typedef struct S{ int x, y; } S_t;
+S_t b = {1, 0};
+)c";
+
+
+TEST_F(VarDeclTest, WithTypedefTypes) {
+  ASSERT_TRUE(scanOnCode(VarWithTypedefTypes));
+  ASSERT_EQ(getResult().size(), 2);
+
+  const auto &D1 = getResult()[0];
+  EXPECT_EQ(D1.Name, "a");
+  EXPECT_EQ(D1.Kind, Decl::Kind::Var);
+  checkToRemove(D1, "foo_t a;\n");
+  checkAddToClass(D1, "foo_t a;\n");
+  checkRefs(D1.ImplRefs, {"foo_t"});
+  EXPECT_TRUE(D1.ImplHash == getHashForStringList({"foo_t", "a"}));
+
+  const auto &D2 = getResult()[1];
+  EXPECT_EQ(D2.Name, "b");
+  EXPECT_EQ(D2.Kind, Decl::Kind::Var);
+  checkToRemove(D2, "S_t b = {1, 0};\n");
+  checkAddToClass(D2, "S_t b = {1, 0};\n");
+  checkRefs(D2.ImplRefs, {"S_t"});
+  EXPECT_TRUE(D2.ImplHash == getHashForStringList(
+              {"S_t", "b", "=", "{", "1", ",", "0", "}"}));
 }
 
 

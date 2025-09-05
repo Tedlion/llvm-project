@@ -124,8 +124,6 @@ struct DeclEntry {
   // std::string Expansion;
   // Range ExpansionReplaced{0, 0};
 
-  // sorted by Offset
-  SmallVector<EditLocation, 4> EditLocations;
   //
   // // If the Expansion is empty, the following Ranges points to the sources;
   // // otherwise, the Ranges points to the Expansion.
@@ -135,6 +133,10 @@ struct DeclEntry {
 
   Range ToRemove{0, 0};   // range from source file
   Range AddToClass{0, 0}; // range of the preprocessed file
+  std::string AddToClassText; // text to add to the class
+
+  // sorted by Offset
+  SmallVector<EditLocation, 4> EditLocations;
 
   hash_code InfHash{0};   // for function only
   hash_code ImplHash{0};
@@ -145,12 +147,14 @@ struct DeclEntry {
 
   unsigned IsStatic       : 1 = false; // for functions and variables only
   // unsigned NeedExpansion  : 1 = false; // Fails to expand the macro
-  unsigned IsDefinition   : 1 = false;
+  unsigned IsDefinition   : 1 = false; // Strong definition for vars
   unsigned IsInline       : 1 = false; // for function only
   unsigned IsUnnamed      : 1 = false; // for record only
   unsigned IsUnion        : 1 = false;
   unsigned IsArray        : 1 = false;
   unsigned IsFunctionPtr  : 1 = false;
+  unsigned IsExtern       : 1 = false;
+
 
   using MapType = SmallDenseMap<std::string, RefEntry, 4, StringDenseMapInfo>;
   MapType InfRefs;  // the symbols used in the declaration
@@ -294,6 +298,7 @@ public:
     enableMatcher<TypedefDecl>();
     enableMatcher<RecordDecl>();
     enableMatcher<EnumDecl>();
+    enableMatcher<VarDecl>();
   }
 
   [[nodiscard]] const std::vector<DeclEntry> &getDeclEntries() const {
@@ -340,6 +345,8 @@ private:
                                         const TypedefDecl &TD);
   std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                         const EnumDecl &ED);
+  std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
+                                        const VarDecl &VD);
 
   void fillDeclEntry(DeclEntry &DE, const MatchFinder::MatchResult &Result,
                      const RecordDecl &RD);
@@ -347,6 +354,8 @@ private:
                      const TypedefDecl &TD);
   void fillDeclEntry(DeclEntry &DE, const MatchFinder::MatchResult &Result,
                      const EnumDecl &ED);
+  void fillDeclEntry(DeclEntry &DE, const MatchFinder::MatchResult &Result,
+                     const VarDecl &VD);
 
   template <typename NodeType>
   void onSourceMatch(const MatchFinder::MatchResult &Result) {
