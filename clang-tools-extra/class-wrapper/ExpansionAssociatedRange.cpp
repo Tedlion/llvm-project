@@ -28,7 +28,7 @@
 
 #include <set>
 
-namespace clang::class_wrapper {
+using namespace clang;
 static bool startsWithNewline(const SourceManager &SM, const Token &Tok) {
   return isVerticalWhitespace(SM.getCharacterData(Tok.getLocation())[0]);
 }
@@ -251,7 +251,7 @@ static bool atOrBeforeSeparation(const SourceManager &SM, SourceLocation Loc,
 }
 
 
-CharSourceRange getExpansionAssociatedRange(const Decl &Decl,
+CharSourceRange class_wrapper::getExpansionAssociatedRange(const Decl &Decl,
                                             ASTContext &Context) {
   const SourceManager &SM = Context.getSourceManager();
   const LangOptions &LangOpts = Context.getLangOpts();
@@ -337,4 +337,5 @@ CharSourceRange getExpansionAssociatedRange(const Decl &Decl,
   return Lexer::makeFileCharRange(Range, SM, LangOpts);
 }
 
-}
+
+

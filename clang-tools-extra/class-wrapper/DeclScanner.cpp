@@ -5,8 +5,9 @@
  */
 
 #include "DeclScanner.h"
-#include "Support.h"
 #include "ExpansionAssociatedRange.h"
+#include "Support.h"
+#include "../clangd/unittests/decision_forest_model/CategoricalFeature.h"
 
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/FrontendActions.h"
@@ -73,23 +74,104 @@ static Range getRangeFromAssociated(const CharSourceRange &CSR,
 }
 
 
+Range DeclScanner::getRangeFromSourceRange(SourceRange SR) const {
+  SourceManager &SM = CI->getSourceManager();
+  unsigned Begin = SM.getFileOffset(SR.getBegin());
+  unsigned TokenEnd = SM.getFileOffset(SR.getEnd());
+  auto It = findTokenOrAfter(SR.getEnd());
+  assert(It != PPTokens.end() && It->first == SR.getEnd());
+  unsigned TokenLen = It->second.getLength();
+  return {Begin, TokenEnd + TokenLen - Begin};
+}
+
+
+SourceRange DeclScanner::getRangeWithAttributes(const Decl &Decl) const {
+  SourceLocation Begin = Decl.getBeginLoc();
+  SourceLocation End = Decl.getEndLoc();
+
+  const Attr * AttrBefore = nullptr;
+  const Attr * AttrAfter = nullptr;
+
+  for (const Attr * A : Decl.attrs()) {
+    SourceRange AttrRange = A->getRange();
+    assert(AttrRange.isValid());
+    // It seems
+    if(AttrRange.getBegin() < Begin) {
+      Begin = AttrRange.getBegin();
+      AttrBefore = A;
+    } else if (AttrRange.getEnd() > End) {
+      End = AttrRange.getEnd();
+      AttrAfter = A;
+    }
+  }
+
+  if (AttrBefore) {
+    auto It = findTokenOrAfter(Begin);
+    switch (AttrBefore->getSyntax()) {
+    case Attr::AS_GNU:
+      assert((It - 1)->second.is(tok::l_paren));
+      assert((It - 2)->second.is(tok::l_paren));
+      assert((It - 3)->second.is(tok::kw___attribute));
+      Begin = (It - 3)->first;
+      break;
+    case Attr::AS_CXX11:
+    case Attr::AS_C23:
+      assert((It - 1)->second.is(tok::l_square));
+      assert((It - 2)->second.is(tok::l_square));
+      Begin = (It - 2)->first;
+      break;
+    case Attr::AS_Declspec:
+      assert((It - 1)->second.is(tok::l_paren));
+      assert((It - 2)->second.is(tok::l_paren));
+      assert((It - 3)->second.is(tok::kw___declspec));
+      Begin = (It - 3)->first;
+      break;
+    default:
+      llvm::errs() << std::format("Unhandled Attr syntax: {}\n",
+                                  static_cast<int>(AttrBefore->getSyntax()));
+      assert(0);
+    }
+  }
+
+  if (AttrAfter) {
+    auto It = findTokenOrAfter(End);
+    switch (AttrAfter->getSyntax()) {
+    case Attr::AS_GNU:
+      assert((It + 1)->second.is(tok::r_paren));
+      assert((It + 2)->second.is(tok::r_paren));
+      End = (It + 2)->first;
+      break;
+    case Attr::AS_CXX11:
+    case Attr::AS_C23:
+      assert((It + 1)->second.is(tok::r_square));
+      assert((It + 2)->second.is(tok::r_square));
+      End = (It + 2)->first;
+      break;
+    case Attr::AS_Declspec:
+      assert((It + 1)->second.is(tok::r_paren));
+      assert((It + 2)->second.is(tok::r_paren));
+      End = (It + 2)->first;
+      break;
+    default:
+      llvm::errs() << std::format("Unhandled Attr syntax: {}\n",
+                                  static_cast<int>(AttrAfter->getSyntax()));
+      assert(0);
+    }
+  }
+  return SourceRange(Begin, End);
+}
+
+
 // Ignoring spaces, newlines, comments, and tabs when getting the Hash
 // Attention: cannot handle macro expansion
-hash_code DeclScanner::getTokenHash(const Decl &D) const {
+hash_code DeclScanner::getTokenHash(SourceRange SR) const {
   hash_code Hash(0);
   const Preprocessor &PP = CI->getPreprocessor();
   // const SourceManager &SM = PP.getSourceManager();
 
-  auto It = findTokenOrAfter(D.getBeginLoc());
-  assert(It != PPTokens.end() && It->first == D.getBeginLoc());
-
-  SourceLocation EndLoc = D.getEndLoc();
-
-  for (auto &Attr : D.attrs()) {
-    SourceRange AttrRange = Attr->getRange();
-    if (AttrRange.isValid() && AttrRange.getEnd() > EndLoc)
-      EndLoc = AttrRange.getEnd();
-  }
+  auto It = findTokenOrAfter(SR.getBegin());
+  assert(It != PPTokens.end() && It->first == SR.getBegin());
+  SourceLocation EndLoc = SR.getEnd();
 
   for (;; ++It) {
     const auto &[Loc, Tok] = *It;
@@ -103,20 +185,15 @@ hash_code DeclScanner::getTokenHash(const Decl &D) const {
       break;
   }
 
-  // Handle tail attributes
-  ++It;
-  for (; It != PPTokens.end(); ++It) {
-    const auto &[Loc, Tok] = *It;
-    if (Tok.isNot(tok::r_paren) && Tok.isNot(tok::r_square))
-      break;
-    std::string TokSpelling = PP.getSpelling(Tok);
-    // llvm::errs() << "Hash token: '" << TokSpelling << "' at "
-    //     << Loc.printToString(SM) << " " << Loc.getRawEncoding() << "\n";
-    Hash = hash_combine(Hash, TokSpelling);
-  }
-
   // llvm::errs() << "Hash:" << hash_value(Hash) << "\n";
   return Hash;
+}
+
+
+// Ignoring spaces, newlines, comments, and tabs when getting the Hash
+// Attention: cannot handle macro expansion
+hash_code DeclScanner::getTokenHash(const Decl &D) const {
+  return getTokenHash(getRangeWithAttributes(D));
 }
 
 
@@ -302,21 +379,20 @@ private:
 // Overlapping ranges of combined decls:
 // The clang AST is not with the same hierarchy with the standard grammar.
 // There is not an AST node for init-declarator-list, instead, the Decls are
-// individual nodes. There we be Decls with overlapped SourceRange.
+// individual nodes. There are Decls with overlapped SourceRange.
 // For example, code "struct {int x, y;} s, (*fp2)(int x, int y);" will be
 // parsed as one RecordDecl, one VarDecl for "s", and one VarDecl for the
 // function pointer. As another instance, code "typedef struct {int x, y;} a, b;"
-// will be parsed as one RecordDecl and two TypedefDecls for "a" and b.
+// will be parsed as one RecordDecl and two TypedefDecls for "a" and "b".
 //
-// It will not be a problem for removing overlapping ranges of Decls from the
-// source code, removing their union is fine. But adding the Decls to the class
-// is more complicated. We prefer to split the combined Decls, one declaration
-// (end with semicolon) for each Decl node, unless the Decl is
-// unnamed(RecordDecl). Unnamed RecordDecl can be combined with TypedefDecl
-// or VarDecl, which appear later in AST. When a TypedefDecl or VarDecl with a
-// unnamed RecordDecl is matched, we do am absorb action, which move the
-// AddToClass to the later entry.
-
+// It will not be a problem for removing overlapping ranges ( removing the union)
+// of Decls from the source code. But adding the Decls to the class is more
+// complicated. We prefer to split the combined Decls, one declaration (end with
+// semicolon) for each Decl node, unless the Decl is unnamed(RecordDecl). Unnamed
+// RecordDecl can be combined with TypedefDecl or VarDecl, which appear later in
+// AST. When a TypedefDecl or VarDecl with an unnamed RecordDecl is matched,
+// we do an absorb action, which move the TypedefDecl or the VarDecl to the
+// RecordDecl.
 
 std::optional<DeclEntry> DeclScanner::getDeclEntry(
     const MatchFinder::MatchResult &Result, const RecordDecl &RD) {
@@ -377,15 +453,16 @@ void DeclScanner::fillDeclEntry(DeclEntry &DE,
     return;
 
   const SourceManager &SM = *Result.SourceManager;
-  // SourceRange SR = RD.getSourceRange();
+  SourceRange SR = RD.getSourceRange();
   // SourceLocation SBegin = SR.getBegin();
   // SourceLocation SEnd = SR.getEnd();
 
   CharSourceRange AssociatedRange = getExpansionAssociatedRange(
       RD, *Result.Context);
   assert(AssociatedRange.isValid());
-  DE.AddToClass = getRangeFromAssociated(AssociatedRange, SM);
-  DE.ImplHash = getTokenHash(RD);
+  SourceRange RangeWithAttrs = getRangeWithAttributes(RD);
+  DE.AddToClass = getRangeFromSourceRange(RangeWithAttrs);
+  DE.ImplHash = getTokenHash(RangeWithAttrs);
 }
 
 
@@ -451,6 +528,7 @@ static std::optional<std::pair<std::string, RefEntry> > getDependent(
 }
 #endif
 
+
 void DeclScanner::findClassnameInsertions(
     CharSourceRange TypedefRange,
     SmallVectorImpl<EditLocation> &EditLocations) const {
@@ -486,6 +564,16 @@ void DeclScanner::findClassnameInsertions(
     LastIsLParen = false;
 
   }
+}
+
+
+DeclEntry *DeclScanner::findRefRecordDecl(const RecordDecl *RD) {
+  // used for finding the RecordDecl of a VarDecl or TypedefDecl,
+  // probably be the last one, so we search backwards.
+  for (auto It = DeclEntries.rbegin(); It != DeclEntries.rend(); ++It)
+    if (It->RecordID == RD)
+      return &*It;
+  return nullptr;
 }
 
 
@@ -552,9 +640,9 @@ std::optional<DeclEntry> DeclScanner::getDeclEntry(
 }
 
 
-void DeclScanner::fillDeclEntry(
-    DeclEntry &DE, const MatchFinder::MatchResult &Result,
-    const TypedefDecl &TD) {
+void DeclScanner::fillDeclEntry(DeclEntry &DE,
+                                const MatchFinder::MatchResult &Result,
+                                const TypedefDecl &TD) {
   assert(DE.Name == TD.getName());
 
   const SourceManager &SM = *Result.SourceManager;
