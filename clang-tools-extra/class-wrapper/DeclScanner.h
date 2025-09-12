@@ -394,9 +394,17 @@ private:
 
   hash_code getTokenHash(const Decl& D) const;
 
+  hash_code getTokenHash(SourceRange SR) const;
+
   void findClassnameInsertions(CharSourceRange TypedefRange,
                                SmallVectorImpl<EditLocation> &EditLocations)
   const;
+
+  DeclEntry *findRefRecordDecl(const RecordDecl *RD);
+
+  SourceRange getRangeWithAttributes(const Decl &Decl) const;
+
+  Range getRangeFromSourceRange(SourceRange SR) const;
 };
 
 
