@@ -17,6 +17,7 @@
 #include "llvm/ADT/ArrayRef.h"
 
 #include <vector>
+#include <ranges>
 
 namespace clang::class_wrapper {
 using namespace clang::ast_matchers;
@@ -61,13 +62,15 @@ struct StringDenseMapInfo {
 enum class EditKind {
   Invalid,
   InsertClassName,
+  RemoveWord,        // remove a word (such as "static") and following spaces
+  // InsertNamePrefix,
   // InsertTypedefName,
   // InsertVarDeclName,
 };
 
 class EditLocation {
-  unsigned Edit           : 8; // EditKind
-  unsigned Offset         : 24;
+  unsigned Edit           : 4; // EditKind
+  unsigned Offset         : 28;
 
 public:
   EditLocation(EditKind Kind, unsigned Offset)
@@ -112,6 +115,7 @@ struct RefEntry {
 
 
 struct DeclEntry {
+  static constexpr unsigned InvalidOffset = static_cast<unsigned>(-1);
   std::string Name;
   Decl::Kind Kind;
 
@@ -131,8 +135,10 @@ struct DeclEntry {
   // Range InfRange{0, 0}; // used in function
   // Range FullRange{0, 0};
 
-  Range ToRemove{0, 0};   // range from source file
-  Range AddToClass{0, 0}; // range of the preprocessed file
+  Range ToRemove{InvalidOffset, 0};   // range from source file
+  Range AddToClass{InvalidOffset, 0}; // range of the preprocessed file
+  unsigned NameOffset = InvalidOffset;
+
   std::string AddToClassText; // text to add to the class
 
   // sorted by Offset
@@ -141,9 +147,11 @@ struct DeclEntry {
   hash_code InfHash{0};   // for function only
   hash_code ImplHash{0};
 
-  // use for retrieving the RecordDecl of type on TypedefDecl and VarDecl
+  // use for retrieving the last Decl
+  //
+  // RecordDecl/EnumDecl of type on TypedefDecl and VarDecl
   // Note: only used for comparing the pointers, never dereferencing it.
-  const RecordDecl * RecordID = nullptr;
+  const Decl * DeclID = nullptr;
 
   unsigned IsStatic       : 1 = false; // for functions and variables only
   // unsigned NeedExpansion  : 1 = false; // Fails to expand the macro
@@ -337,7 +345,25 @@ private:
   std::vector<std::unique_ptr<MatchFinder::MatchCallback>> MatchHandlers;
   std::vector<std::pair<SourceLocation, Token>> PPTokens;
 
-  decltype(PPTokens)::const_iterator findTokenOrAfter(SourceLocation Loc) const;
+  auto findTokenOrAfter(SourceLocation Loc) const {
+    auto It = std::lower_bound(
+        PPTokens.begin(), PPTokens.end(), Loc,
+        [](const auto &Pair, const SourceLocation &Target) {
+          return Pair.first < Target;
+        });
+
+    return It;
+  }
+
+  auto getTokenView(SourceRange SR) const {
+    auto ItBegin = findTokenOrAfter(SR.getBegin());
+    SourceLocation EndLoc = SR.getEnd();
+
+    return std::ranges::subrange(ItBegin, PPTokens.cend()) |
+           std::views::take_while([EndLoc](const auto &pair) {
+             return pair.first <= EndLoc;
+           });
+  }
 
   std::optional<DeclEntry> getDeclEntry(const MatchFinder::MatchResult &Result,
                                         const RecordDecl &RD);
@@ -394,15 +420,31 @@ private:
 
   hash_code getTokenHash(const Decl& D) const;
 
-  hash_code getTokenHash(SourceRange SR) const;
+  hash_code getTokenHash(SourceRange SR, hash_code Init = hash_code(0)) const;
 
-  void findClassnameInsertions(CharSourceRange TypedefRange,
-                               SmallVectorImpl<EditLocation> &EditLocations)
-  const;
+  void findClassnameInsertions(
+      SourceRange SR, SmallVectorImpl<EditLocation> &EditLocations) const;
 
-  DeclEntry *findRefRecordDecl(const RecordDecl *RD);
+  void removeLinkage(
+      SourceRange SR, SmallVectorImpl<EditLocation> &EditLocations) const;
+
+  DeclEntry *findRefDecl(const Decl *D);
+
+  DeclEntry *getPrevDeclEntry(DeclEntry *DE) const {
+    if (DE == &DeclEntries[0])
+      return nullptr;
+    return DE - 1;
+  }
 
   SourceRange getRangeWithAttributes(const Decl &Decl) const;
+
+  /**
+   * @return If the Decl is combined with previous Decl(s), return the
+   * incremental range which need further check for edits; otherwise return
+   * the same as Decl's range.
+   */
+  std::pair<bool/*isCombined*/, SourceRange> checkCombinedDecls(
+      const Decl &Decl, DeclEntry &DE);
 
   Range getRangeFromSourceRange(SourceRange SR) const;
 };

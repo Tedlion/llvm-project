@@ -54,16 +54,6 @@ const Matcher<Decl> FunctionDeclMatcher =
 //     };
 
 
-decltype(DeclScanner::PPTokens)::const_iterator
-DeclScanner::findTokenOrAfter(SourceLocation Loc) const {
-  auto It = std::lower_bound(
-      PPTokens.begin(), PPTokens.end(), Loc,
-      [](const auto &Pair, const SourceLocation &Target) {
-        return Pair.first < Target;
-      });
-
-  return It;
-}
 
 
 static Range getRangeFromAssociated(const CharSourceRange &CSR,
@@ -89,14 +79,14 @@ SourceRange DeclScanner::getRangeWithAttributes(const Decl &Decl) const {
   SourceLocation Begin = Decl.getBeginLoc();
   SourceLocation End = Decl.getEndLoc();
 
-  const Attr * AttrBefore = nullptr;
-  const Attr * AttrAfter = nullptr;
+  const Attr *AttrBefore = nullptr;
+  const Attr *AttrAfter = nullptr;
 
-  for (const Attr * A : Decl.attrs()) {
+  for (const Attr *A : Decl.attrs()) {
     SourceRange AttrRange = A->getRange();
     assert(AttrRange.isValid());
     // It seems
-    if(AttrRange.getBegin() < Begin) {
+    if (AttrRange.getBegin() < Begin) {
       Begin = AttrRange.getBegin();
       AttrBefore = A;
     } else if (AttrRange.getEnd() > End) {
@@ -164,28 +154,21 @@ SourceRange DeclScanner::getRangeWithAttributes(const Decl &Decl) const {
 
 // Ignoring spaces, newlines, comments, and tabs when getting the Hash
 // Attention: cannot handle macro expansion
-hash_code DeclScanner::getTokenHash(SourceRange SR) const {
-  hash_code Hash(0);
+hash_code DeclScanner::getTokenHash(SourceRange SR, hash_code Init) const {
+  hash_code Hash = Init;
   const Preprocessor &PP = CI->getPreprocessor();
   // const SourceManager &SM = PP.getSourceManager();
 
-  auto It = findTokenOrAfter(SR.getBegin());
-  assert(It != PPTokens.end() && It->first == SR.getBegin());
-  SourceLocation EndLoc = SR.getEnd();
-
-  for (;; ++It) {
-    const auto &[Loc, Tok] = *It;
+  for (const auto &[Loc, Tok] : getTokenView(SR)) {
     if (Tok.is(tok::comment))
       continue;
     std::string TokSpelling = PP.getSpelling(Tok);
     // llvm::errs() << "Hash token: '" << TokSpelling << "' at "
     //     << Loc.printToString(SM) << " " << Loc.getRawEncoding() << "\n";
     Hash = hash_combine(Hash, TokSpelling);
-    if (Loc == EndLoc)
-      break;
+  // llvm::errs() << "Hash:" << hash_value(Hash) << "\n";
   }
 
-  // llvm::errs() << "Hash:" << hash_value(Hash) << "\n";
   return Hash;
 }
 
@@ -258,8 +241,9 @@ public:
     return true;
   }
 
+
   bool VisitValueDecl(ValueDecl *VD) {
-    DeclContext * DC = VD->getDeclContext();
+    DeclContext *DC = VD->getDeclContext();
     // avoid record local varDecl
     if (DC->isFunctionOrMethod())
       return true;
@@ -269,7 +253,6 @@ public:
     EnclosureVars.insert(VD);
     return true;
   }
-
 
 
   // bool TraverseCStyleCastExpr(CStyleCastExpr *E, DataRecursionQueue *Queue = nullptr) {
@@ -426,7 +409,7 @@ std::optional<DeclEntry> DeclScanner::getDeclEntry(
   DE.IsUnnamed = DE.Name.empty();
 
   DE.Kind = RD.getKind();
-  DE.RecordID = &RD;
+  DE.DeclID = &RD;
   DE.IsUnion = RD.isUnion();
   DE.IsDefinition = RD.isCompleteDefinition();
   CharSourceRange AssociatedRange = getExpansionAssociatedRange(
@@ -452,14 +435,10 @@ void DeclScanner::fillDeclEntry(DeclEntry &DE,
   if (!DE.IsDefinition)
     return;
 
-  const SourceManager &SM = *Result.SourceManager;
-  SourceRange SR = RD.getSourceRange();
-  // SourceLocation SBegin = SR.getBegin();
-  // SourceLocation SEnd = SR.getEnd();
-
-  CharSourceRange AssociatedRange = getExpansionAssociatedRange(
-      RD, *Result.Context);
-  assert(AssociatedRange.isValid());
+  if (!DE.IsUnnamed) {
+    SourceManager &SM = CI->getSourceManager();
+    DE.NameOffset = SM.getFileOffset(RD.getLocation());
+  }
   SourceRange RangeWithAttrs = getRangeWithAttributes(RD);
   DE.AddToClass = getRangeFromSourceRange(RangeWithAttrs);
   DE.ImplHash = getTokenHash(RangeWithAttrs);
@@ -530,48 +509,58 @@ static std::optional<std::pair<std::string, RefEntry> > getDependent(
 
 
 void DeclScanner::findClassnameInsertions(
-    CharSourceRange TypedefRange,
-    SmallVectorImpl<EditLocation> &EditLocations) const {
+    SourceRange SR, SmallVectorImpl<EditLocation> &EditLocations) const {
   // We need to turn all function pointer to member function pointer,
   // by inserting the class name specifier before the '*' which represent
   // the function pointer type.
   // There may be multiple insertion locations, for the types of a function's
   // return and parameters can also be function pointers.
   //  e.g. The type name may be `int (*(*(*[10])(int))(foo_t (**)(int)))()`
+
+  // FIXME: not all continuous "(*" are function pointers,
+  //  e.g. `int x = (*p);`
+  //  we need to exclude the range of expressions.
+  //  No expression in TypedefDecl, RecordDecl(only for C) and
+  //  FunctionDecl(only for C, excluding body).
+  //  For VarDecl, we need to exclude the initializer expression.
+  //  However, we need to handle the explicit cast expression like
+  //  `void (*fvp)(int) = (void(*)(int))func1;` in VarDecl initializer and
+  //  function body expression.
   SourceManager &SM = CI->getSourceManager();
-  SourceLocation Begin = TypedefRange.getBegin();
-  SourceLocation End = TypedefRange.getEnd();
-  unsigned BeginOffset = SM.getFileOffset(Begin);
   bool LastIsLParen = false;
 
-  for (auto It = findTokenOrAfter(Begin); It != PPTokens.end(); ++It) {
-    const auto &[Loc, Tok] = *It;
-    if (Loc > End)
-      break;
-
+  for (const auto &[Loc, Tok] : getTokenView(SR)) {
     if (Tok.is(tok::l_paren)) {
       LastIsLParen = true;
+
       continue;
-    }
-
-    if (LastIsLParen && Tok.is(tok::star)) {
-      unsigned Offset = SM.getFileOffset(Loc);
       // To insert just before the '*'
-      EditLocations.emplace_back(EditKind::InsertClassName,
-                                 Offset - BeginOffset);
     }
-
+    if (LastIsLParen && Tok.is(tok::star))
+      EditLocations.emplace_back(EditKind::InsertClassName,
+                                 SM.getFileOffset(Loc));
     LastIsLParen = false;
-
   }
 }
 
 
-DeclEntry *DeclScanner::findRefRecordDecl(const RecordDecl *RD) {
+void DeclScanner::removeLinkage(
+    SourceRange SR, SmallVectorImpl<EditLocation> &EditLocations) const {
+  SourceManager &SM = CI->getSourceManager();
+  using namespace tok;
+  for (const auto &[Loc, Tok] : getTokenView(SR)) {
+    if (Tok.is(kw_static) || Tok.is(kw_extern) || Tok.is(kw_inline))
+      EditLocations.emplace_back(
+          EditKind::RemoveWord, SM.getFileOffset(Loc));
+  }
+}
+
+
+DeclEntry *DeclScanner::findRefDecl(const Decl *D) {
   // used for finding the RecordDecl of a VarDecl or TypedefDecl,
   // probably be the last one, so we search backwards.
   for (auto It = DeclEntries.rbegin(); It != DeclEntries.rend(); ++It)
-    if (It->RecordID == RD)
+    if (It->DeclID == D)
       return &*It;
   return nullptr;
 }
@@ -629,14 +618,87 @@ std::optional<DeclEntry> DeclScanner::getDeclEntry(
   // we check that with Range and the RecordID.
   QualType UnderlyingType = TD.getUnderlyingType();
   QualType RemoveArrayType = removeArray(UnderlyingType);
-  if (const ElaboratedType *ET = dyn_cast<ElaboratedType>(
-      RemoveArrayType.getTypePtr()))
-    if (const RecordType *RT = dyn_cast<RecordType>(
-        ET->getNamedType().getTypePtr()))
-      DE.RecordID = RT->getDecl();
+  if (const ElaboratedType *Elaborated = dyn_cast<ElaboratedType>(
+      RemoveArrayType.getTypePtr())) {
+    const Type *ReferTo = Elaborated->getNamedType().getTypePtr();
+    if (const RecordType *RT = dyn_cast<RecordType>(ReferTo))
+      DE.DeclID = RT->getDecl();
+    else if (const EnumType *ET = dyn_cast<EnumType>(ReferTo))
+      DE.DeclID = ET->getDecl();
+  }
 
   DE.ToRemove = getRangeFromAssociated(AssociatedRange, SM);
   return DE;
+}
+
+
+// static bool isOverlapping(SourceRange X, SourceRange Y) {
+//   return X.getBegin() <= Y.getEnd() || Y.getBegin() <= X.getEnd();
+// }
+//
+//
+// static bool fullyContains(Range X, Range Y) {
+//
+// }
+
+
+std::pair<bool/*isCombined*/, SourceRange> DeclScanner::checkCombinedDecls(
+    const Decl &Decl, DeclEntry &DE) {
+  // For an init-declarator-list, AST nodes with overlapping ranges are matched
+  // For example, code "typedef struct {int x, y;} a, b[10], (*c)(int x);"
+  // The following nodes are matched in order:
+  //   1) RecordDecl with range "struct {int x, y;}"
+  //   2) TypedefDecl with range "typedef struct {int x, y;} a"
+  //   3) TypedefDecl with range "typedef struct {int x, y;} a, b[10]"
+  //   4) TypedefDecl with range "typedef struct {int x, y;} a, b[10], (*c)(int x)"
+  // If the later Decl's range fully contains the previous one's, an absorb
+  // action is performed, which takes and make an incremental modification on the
+  // previous AddToClass, EditLocations and ImplHash(only when with same
+  // beginning location).
+
+  SourceRange SourceRangeWithAttrs = getRangeWithAttributes(Decl);
+  DeclEntry *PrevDE = getPrevDeclEntry(&DE);
+  if (!PrevDE)
+    return {false, SourceRangeWithAttrs};
+
+  Range RangeWithAttrs = getRangeFromSourceRange(SourceRangeWithAttrs);
+  Range PrevRange = PrevDE->AddToClass;
+  assert(!RangeWithAttrs.overlapsWith(PrevRange) || RangeWithAttrs.contains(PrevRange));
+  if (!RangeWithAttrs.contains(PrevRange))
+    return {false, SourceRangeWithAttrs};
+
+  PrevDE->AddToClass = {DeclEntry::InvalidOffset, 0};
+  std::swap(DE.EditLocations, PrevDE->EditLocations);
+
+  if (RangeWithAttrs.getOffset() < PrevRange.getOffset()) {
+    unsigned HeadLength = PrevRange.getOffset() - RangeWithAttrs.getOffset();
+    auto HeadIncrementalRange = SourceRange(
+        SourceRangeWithAttrs.getBegin(),
+        SourceRangeWithAttrs.getBegin().getLocWithOffset(HeadLength - 1));
+    removeLinkage(HeadIncrementalRange, DE.EditLocations);
+  }
+
+  unsigned CurEndOffset = RangeWithAttrs.getOffset() + RangeWithAttrs.getLength();
+  unsigned PrevEndOffset = PrevRange.getOffset() + PrevRange.getLength();
+  unsigned TailLen = CurEndOffset - PrevEndOffset;
+  SourceRange TailIncrementalRange;
+
+  if (TailLen > 0) {
+    TailIncrementalRange = SourceRange(
+        SourceRangeWithAttrs.getEnd().getLocWithOffset(-static_cast<int>(TailLen - 1)),
+        SourceRangeWithAttrs.getEnd());
+    // TODO: exclude init-expression, include cast-expression
+    findClassnameInsertions(TailIncrementalRange, DE.EditLocations);
+  }
+
+  if (RangeWithAttrs.getOffset() < PrevRange.getOffset())
+    DE.ImplHash = getTokenHash(SourceRangeWithAttrs);
+  else if (TailLen > 0)
+    DE.ImplHash = getTokenHash(TailIncrementalRange, PrevDE->ImplHash);
+  else
+    DE.ImplHash = PrevDE->ImplHash;
+
+  return {true, SourceRangeWithAttrs};
 }
 
 
@@ -645,11 +707,7 @@ void DeclScanner::fillDeclEntry(DeclEntry &DE,
                                 const TypedefDecl &TD) {
   assert(DE.Name == TD.getName());
 
-  const SourceManager &SM = *Result.SourceManager;
   QualType UnderlyingType = TD.getUnderlyingType();
-  CharSourceRange AssociatedRange = getExpansionAssociatedRange(
-      TD, *Result.Context);
-
   DependencyVisitor::scanOn(
       UnderlyingType,
       [&DE](const std::string &Name, const RefEntry &Ref) {
@@ -657,24 +715,35 @@ void DeclScanner::fillDeclEntry(DeclEntry &DE,
           DE.ImplRefs.try_emplace(Name, Ref);
       });
 
-  DE.AddToClass = getRangeFromAssociated(AssociatedRange, SM);
-
-  // std::string Expansion = UnderlyingType.getAsString();
-  findClassnameInsertions(AssociatedRange, DE.EditLocations);
-
-  // FunctionPtr or FunctionPtr Array
-  bool WithFunctionPtr = !DE.EditLocations.empty();
-
-  if (isa<ArrayType>(UnderlyingType.getTypePtr())) {
-    DE.IsArray = true;
-  } else if (WithFunctionPtr) {
-    DE.IsFunctionPtr = true;
+  // const SourceManager &SM = *Result.SourceManager;
+  auto [Combined, RangeWithAttrs] = checkCombinedDecls(TD, DE);
+  if (!Combined) {
+    DE.AddToClass = getRangeFromSourceRange(RangeWithAttrs);
+    DE.ImplHash = getTokenHash(RangeWithAttrs);
   }
 
+  // findClassnameInsertions(RangeWithAttrs, DE.EditLocations);
   llvm::sort(DE.EditLocations);
-  DE.ImplHash = getTokenHash(TD);
-}
+  SourceManager &SM = CI->getSourceManager();
+  DE.NameOffset = SM.getFileOffset(TD.getLocation());
 
+  // if (DE.DeclID) {
+  //   DeclEntry *ReferTo = findRefDecl(DE.DeclID);
+  //
+  // }
+
+  // std::string Expansion = UnderlyingType.getAsString();
+
+
+  // FunctionPtr or FunctionPtr Array
+  // bool WithFunctionPtr = !DE.EditLocations.empty();
+
+  // if (isa<ArrayType>(UnderlyingType.getTypePtr())) {
+  //   DE.IsArray = true;
+  // } else if (WithFunctionPtr) {
+  //   DE.IsFunctionPtr = true;
+  // }
+}
 
 
 std::optional<DeclEntry> DeclScanner::getDeclEntry(
@@ -763,7 +832,8 @@ void DeclScanner::fillDeclEntry(DeclEntry &DE,
     std::string InitText;
     raw_string_ostream OS(InitText);
     VD.getInit()->dump(OS, *Result.Context);
-    DE.AddToClassText = std::format("{} {} = {};\n", TypeName, DE.Name, InitText);
+    DE.AddToClassText = std::format("{} {} = {};\n", TypeName, DE.Name,
+                                    InitText);
   } else {
     DE.AddToClassText = std::format("{} {};\n", TypeName, DE.Name);
   }
