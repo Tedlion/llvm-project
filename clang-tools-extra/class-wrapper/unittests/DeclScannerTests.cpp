@@ -1044,7 +1044,7 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   const auto &D1 = getResult()[0];
   EXPECT_EQ(D1.Name, "S");
   EXPECT_EQ(D1.Kind, Decl::Kind::Record);
-  EXPECT_TRUE(D1.RecordID);
+  EXPECT_TRUE(D1.DeclID);
   checkToRemove(D1, "struct S {", "} S_t;\n");
   checkAddToClass(D1, "struct S {", "} S_t;\n");
   EXPECT_EQ(D1.ImplHash, getHashForStringList(
@@ -1054,7 +1054,7 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   const auto &D2 = getResult()[1];
   EXPECT_EQ(D2.Name, "S_t");
   EXPECT_EQ(D2.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D2.RecordID, D1.RecordID);
+  EXPECT_EQ(D2.DeclID, D1.DeclID);
   checkToRemove(D2, "typedef struct S {", "} S_t;\n");
   checkAddToClass(D2, "typedef struct S {", "} S_t;\n");
   checkRefs(D2.ImplRefs, {"S"});
@@ -1062,7 +1062,7 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   const auto &D3 = getResult()[2];
   EXPECT_EQ(D3.Name, "");
   EXPECT_EQ(D3.Kind, Decl::Kind::Record);
-  EXPECT_TRUE(D3.RecordID);
+  EXPECT_TRUE(D3.DeclID);
   EXPECT_TRUE(D3.IsUnnamed);
   checkToRemove(D3, "struct {", "} S2_t;\n");
   checkAddToClass(D3, "struct {", "} S2_t;\n");
@@ -1073,20 +1073,20 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   const auto &D4 = getResult()[3];
   EXPECT_EQ(D4.Name, "S2_t");
   EXPECT_EQ(D4.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D4.RecordID, D3.RecordID);
+  EXPECT_EQ(D4.DeclID, D3.DeclID);
   checkToRemove(D4, "typedef struct {", "} S2_t;\n");
   checkAddToClass(D4, "typedef struct {", "} S2_t;\n");
   checkRefs(D4.ImplRefs, {});
 
   const auto &D5 = getResult()[4];
   EXPECT_EQ(D5.Name, "S2_t2");
-  EXPECT_EQ(D5.RecordID, nullptr);
+  EXPECT_EQ(D5.DeclID, nullptr);
   checkRefs(D5.ImplRefs, {"S2_t"});
 
   const auto &D6 = getResult()[5];
   EXPECT_EQ(D6.Name, "");
   EXPECT_EQ(D6.Kind, Decl::Kind::Record);
-  EXPECT_TRUE(D6.RecordID);
+  EXPECT_TRUE(D6.DeclID);
   EXPECT_TRUE(D6.IsUnnamed);
   checkToRemove(D6, "struct {", "} Sa_t[][10];\n");
   checkAddToClass(D6, "struct {", "} Sa_t[][10];\n");
@@ -1096,7 +1096,7 @@ TEST_F(MatcherTest, CombinedTypedefAndStruct) {
   const auto &D7 = getResult()[6];
   EXPECT_EQ(D7.Name, "Sa_t");
   EXPECT_EQ(D7.Kind, Decl::Kind::Typedef);
-  EXPECT_EQ(D7.RecordID, D6.RecordID);
+  EXPECT_EQ(D7.DeclID, D6.DeclID);
   checkToRemove(D7, "typedef struct {", "} Sa_t[][10];\n");
   checkAddToClass(D7, "typedef struct {", "} Sa_t[][10];\n");
   checkRefs(D7.ImplRefs, {});
