@@ -10,14 +10,15 @@
 #include "ClassWrapperContext.h"
 
 #include "MacroExpansionRecorder.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Tooling/CompilationDatabase.h"
 #include "clang/Tooling/Tooling.h"
 #include "llvm/ADT/ArrayRef.h"
 
-#include <vector>
 #include <ranges>
+#include <vector>
 
 namespace clang::class_wrapper {
 using namespace clang::ast_matchers;
@@ -322,6 +323,9 @@ public:
   }
 
 private:
+  template <bool FromSource>
+  friend class EditVisitor;
+
   // const ClassWrapperContext &Context;
   std::string Target;
   std::string SourceFile;
@@ -423,10 +427,10 @@ private:
   hash_code getTokenHash(SourceRange SR, hash_code Init = hash_code(0)) const;
 
   void findClassnameInsertions(
-      SourceRange SR, SmallVectorImpl<EditLocation> &EditLocations) const;
+      SourceRange SR, SmallVectorImpl<EditLocation> &Edits) const;
 
   void removeLinkage(
-      SourceRange SR, SmallVectorImpl<EditLocation> &EditLocations) const;
+      SourceRange SR, SmallVectorImpl<EditLocation> &Edits) const;
 
   DeclEntry *findRefDecl(const Decl *D);
 
@@ -521,8 +525,6 @@ std::formatter<std::string> {
     return std::formatter<std::string>::format(Result, Ctx);
   }
 };
-
-
 
 
 #endif // LLVM_CLANG_TOOLS_EXTRA_CLASS_WRAPPER_DECLSCANNER_H

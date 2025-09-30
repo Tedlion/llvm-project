@@ -7,9 +7,7 @@
 #include "DeclScanner.h"
 #include "ExpansionAssociatedRange.h"
 #include "Support.h"
-#include "../clangd/unittests/decision_forest_model/CategoricalFeature.h"
 
-#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Frontend/FrontendActions.h"
 #include "clang/Tooling/Tooling.h"
 #include "clang/Tooling/Transformer/SourceCode.h"
@@ -335,7 +333,7 @@ private:
   SmallSet<ValueDecl *, 4> EnclosureVars;
 
 
-  bool hasPointeeIndependent(const PointerType *PT) {
+  static bool hasPointeeIndependent(const PointerType *PT) {
     QualType Pointee = PT->getPointeeType();
     const Type *PointeeType = Pointee.getTypePtr();
 
@@ -346,10 +344,10 @@ private:
     // the declaration of `struct S` is not necessary,
     // thus we should early return here.
     if (const auto *Elaborated = dyn_cast<ElaboratedType>(PointeeType)) {
-      auto Keyword = Elaborated->getKeyword();
-      if (Keyword == ElaboratedTypeKeyword::Struct ||
-          Keyword == ElaboratedTypeKeyword::Union ||
-          Keyword == ElaboratedTypeKeyword::Class)
+      if (auto Keyword = Elaborated->getKeyword();
+        Keyword == ElaboratedTypeKeyword::Struct ||
+        Keyword == ElaboratedTypeKeyword::Union ||
+        Keyword == ElaboratedTypeKeyword::Class)
         return true;
     }
 
@@ -358,6 +356,17 @@ private:
 };
 
 } // namespace
+
+
+static bool isFunctionPointerType(QualType QT) {
+  if (QT->isPointerType()) {
+    QualType Pointee = QT->getPointeeType();
+    if (Pointee->isFunctionProtoType() || Pointee->isFunctionType())
+      return true;
+  }
+  return false;
+}
+
 
 // Overlapping ranges of combined decls:
 // The clang AST is not with the same hierarchy with the standard grammar.
@@ -368,7 +377,7 @@ private:
 // function pointer. As another instance, code "typedef struct {int x, y;} a, b;"
 // will be parsed as one RecordDecl and two TypedefDecls for "a" and "b".
 //
-// It will not be a problem for removing overlapping ranges ( removing the union)
+// It will not be a problem for removing overlapping ranges (removing the union)
 // of Decls from the source code. But adding the Decls to the class is more
 // complicated. We prefer to split the combined Decls, one declaration (end with
 // semicolon) for each Decl node, unless the Decl is unnamed(RecordDecl). Unnamed
@@ -376,6 +385,77 @@ private:
 // AST. When a TypedefDecl or VarDecl with an unnamed RecordDecl is matched,
 // we do an absorb action, which move the TypedefDecl or the VarDecl to the
 // RecordDecl.
+
+
+template <bool FromSource = false>
+class EditVisitor : public RecursiveASTVisitor<EditVisitor<FromSource>> {
+  // For each
+
+public:
+  static void scanOn(const Expr &E, DeclScanner &Scanner,
+                     SmallVectorImpl<EditLocation> &Edits) {
+    static_assert(!FromSource,
+                  "Edit from source is only designed for FunctionDecls");
+    EditVisitor Visitor(Scanner, Edits);
+    Visitor.TraverseStmt(const_cast<Expr *>(&E));
+  }
+
+
+  static bool scanOn(const FunctionDecl &FD, DeclScanner &Scanner,
+                     SmallVectorImpl<EditLocation> &Edits) {
+    EditVisitor Visitor(Scanner, Edits);
+    Visitor.TraverseDecl(const_cast<FunctionDecl *>(&FD));
+    return !Visitor.EncounterMacro;
+  }
+
+
+  static void scanOn(const RecordDecl &RD, DeclScanner &Scanner,
+                     SmallVectorImpl<EditLocation> &Edits) {
+    static_assert(!FromSource,
+              "Edit from source is only designed for FunctionDecls");
+    EditVisitor Visitor(Scanner, Edits);
+    Visitor.TraverseDecl(const_cast<RecordDecl *>(&RD));
+  }
+
+  // Seems no need to start a recursive traversal on other Decls?
+
+  bool shouldTraversePostOrder() const {
+    return true;
+  }
+
+
+  bool VisitFieldDecl(FieldDecl *FD) {
+    // TODO
+    return true;
+  }
+
+  bool VisitVarDecl(VarDecl *VD) {
+
+    return true;
+  }
+
+  bool VisitCStyleCastExpr(CStyleCastExpr *E) {
+    if (isFunctionPointerType(E->getTypeAsWritten()))
+      Scanner.findClassnameInsertions(E->getSourceRange(), Edits);
+    return true;
+  }
+
+private:
+  DeclScanner &Scanner;
+  SmallVectorImpl<EditLocation> &Edits;
+  SourceRange LastDeclRange;
+  bool EncounterMacro = false;
+
+  EditVisitor(DeclScanner &Scanner,
+              SmallVectorImpl<EditLocation> &Edits) : Scanner(Scanner),
+    Edits(Edits) {}
+
+
+  std::pair<SourceRange/*head*/, SourceRange/*tail*/> getIncrementalRange(
+      SourceRange SR) {}
+
+};
+
 
 std::optional<DeclEntry> DeclScanner::getDeclEntry(
     const MatchFinder::MatchResult &Result, const RecordDecl &RD) {
@@ -507,9 +587,8 @@ static std::optional<std::pair<std::string, RefEntry> > getDependent(
 }
 #endif
 
-
 void DeclScanner::findClassnameInsertions(
-    SourceRange SR, SmallVectorImpl<EditLocation> &EditLocations) const {
+    SourceRange SR, SmallVectorImpl<EditLocation> &Edits) const {
   // We need to turn all function pointer to member function pointer,
   // by inserting the class name specifier before the '*' which represent
   // the function pointer type.
@@ -517,11 +596,10 @@ void DeclScanner::findClassnameInsertions(
   // return and parameters can also be function pointers.
   //  e.g. The type name may be `int (*(*(*[10])(int))(foo_t (**)(int)))()`
 
-  // FIXME: not all continuous "(*" are function pointers,
-  //  e.g. `int x = (*p);`
-  //  we need to exclude the range of expressions.
-  //  No expression in TypedefDecl, RecordDecl(only for C) and
-  //  FunctionDecl(only for C, excluding body).
+  // FIXME: Not all continuous "(*" are function pointers, e.g. `int x = (*p);`
+  //  We need to exclude the range of expressions. There is no expression in
+  //  TypedefDecl, RecordDecl(only for C) and FunctionDecl (only for C,
+  //  excluding body).
   //  For VarDecl, we need to exclude the initializer expression.
   //  However, we need to handle the explicit cast expression like
   //  `void (*fvp)(int) = (void(*)(int))func1;` in VarDecl initializer and
@@ -532,29 +610,27 @@ void DeclScanner::findClassnameInsertions(
   for (const auto &[Loc, Tok] : getTokenView(SR)) {
     if (Tok.is(tok::l_paren)) {
       LastIsLParen = true;
-
       continue;
-      // To insert just before the '*'
     }
+    // To insert just before the '*'
     if (LastIsLParen && Tok.is(tok::star))
-      EditLocations.emplace_back(EditKind::InsertClassName,
-                                 SM.getFileOffset(Loc));
+      Edits.emplace_back(EditKind::InsertClassName,
+                         SM.getFileOffset(Loc));
     LastIsLParen = false;
   }
 }
 
 
 void DeclScanner::removeLinkage(
-    SourceRange SR, SmallVectorImpl<EditLocation> &EditLocations) const {
+    SourceRange SR, SmallVectorImpl<EditLocation> &Edits) const {
   SourceManager &SM = CI->getSourceManager();
   using namespace tok;
   for (const auto &[Loc, Tok] : getTokenView(SR)) {
     if (Tok.is(kw_static) || Tok.is(kw_extern) || Tok.is(kw_inline))
-      EditLocations.emplace_back(
+      Edits.emplace_back(
           EditKind::RemoveWord, SM.getFileOffset(Loc));
   }
 }
-
 
 DeclEntry *DeclScanner::findRefDecl(const Decl *D) {
   // used for finding the RecordDecl of a VarDecl or TypedefDecl,
@@ -687,8 +763,19 @@ std::pair<bool/*isCombined*/, SourceRange> DeclScanner::checkCombinedDecls(
     TailIncrementalRange = SourceRange(
         SourceRangeWithAttrs.getEnd().getLocWithOffset(-static_cast<int>(TailLen - 1)),
         SourceRangeWithAttrs.getEnd());
-    // TODO: exclude init-expression, include cast-expression
-    findClassnameInsertions(TailIncrementalRange, DE.EditLocations);
+
+    const Expr * InitExpr = nullptr;
+    if (const VarDecl *VD = dyn_cast<VarDecl>(&Decl))
+      InitExpr = VD->getInit();
+
+    if (InitExpr)
+      // SourceLocation InitBegin = InitExpr->getBeginLoc();
+      // SourceRange VarRange(TailIncrementalRange.getBegin(),
+      //                     InitBegin.getLocWithOffset(-1));
+      // findClassnameInsertions(VarRange, DE.EditLocations);
+      EditVisitor::scanOn(*InitExpr, *this, DE.EditLocations);
+    else
+      findClassnameInsertions(TailIncrementalRange, DE.EditLocations);
   }
 
   if (RangeWithAttrs.getOffset() < PrevRange.getOffset())
@@ -1019,3 +1106,4 @@ void DeclScanner::run(StringRef Target, StringRef Filename,
 }
 
 } // namespace clang::class_wrapper
+
