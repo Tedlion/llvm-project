@@ -368,6 +368,13 @@ static bool isFunctionPointerType(QualType QT) {
 }
 
 
+static bool isOverlapped(SourceRange A, SourceRange B) {
+  if (A.isInvalid() || B.isInvalid())
+    return false;
+  return A.getBegin() <= B.getEnd() && B.getBegin() <= A.getEnd();
+}
+
+
 // Overlapping ranges of combined decls:
 // The clang AST is not with the same hierarchy with the standard grammar.
 // There is not an AST node for init-declarator-list, instead, the Decls are
@@ -388,9 +395,7 @@ static bool isFunctionPointerType(QualType QT) {
 
 
 template <bool FromSource = false>
-class EditVisitor : public RecursiveASTVisitor<EditVisitor<FromSource>> {
-  // For each
-
+class EditVisitor : public RecursiveASTVisitor<EditVisitor<FromSource> > {
 public:
   static void scanOn(const Expr &E, DeclScanner &Scanner,
                      SmallVectorImpl<EditLocation> &Edits) {
@@ -417,26 +422,43 @@ public:
     Visitor.TraverseDecl(const_cast<RecordDecl *>(&RD));
   }
 
-  // Seems no need to start a recursive traversal on other Decls?
 
   bool shouldTraversePostOrder() const {
     return true;
   }
 
 
-  bool VisitFieldDecl(FieldDecl *FD) {
-    // TODO
+  bool VisitRecordDecl(RecordDecl *RD) {
+    LastDeclRange = RD->getSourceRange();
     return true;
   }
+
+
+  // Seems no need to start a recursive traversal on other Decls?
+  bool VisitFieldDecl(FieldDecl *FD) {
+    auto [Head, Tail] = getIncrementalRange(FD->getSourceRange());
+    Scanner.findClassnameInsertions(Tail, Edits);
+    return true;
+  }
+
 
   bool VisitVarDecl(VarDecl *VD) {
-
+    auto [Head, Tail] = getIncrementalRange(VD->getSourceRange());
+    Scanner.removeLinkage(Head, Edits);
+    if (const Expr * InitExpr = VD->getInit())
+      Tail.setEnd(InitExpr->getBeginLoc().getLocWithOffset(-1));
+    Scanner.findClassnameInsertions(Tail, Edits);
     return true;
   }
 
+
   bool VisitCStyleCastExpr(CStyleCastExpr *E) {
-    if (isFunctionPointerType(E->getTypeAsWritten()))
-      Scanner.findClassnameInsertions(E->getSourceRange(), Edits);
+    if (isFunctionPointerType(E->getTypeAsWritten())) {
+      SourceRange TypeRange(E->getLParenLoc().getLocWithOffset(1),
+                            E->getRParenLoc().getLocWithOffset(-1));
+      Scanner.findClassnameInsertions(TypeRange, Edits);
+    }
+
     return true;
   }
 
@@ -451,8 +473,25 @@ private:
     Edits(Edits) {}
 
 
-  std::pair<SourceRange/*head*/, SourceRange/*tail*/> getIncrementalRange(
-      SourceRange SR) {}
+  // Attention: Head and Tail will be SR if SR is not combined with previous
+  std::pair<SourceRange/*Head*/, SourceRange/*Tail*/> getIncrementalRange(
+      SourceRange SR) {
+    if (LastDeclRange.isInvalid() || !isOverlapped(LastDeclRange, SR)) {
+      LastDeclRange = SR;
+      return {SR, SR};
+    }
+
+    SourceRange Head, Tail;
+    if (SR.getBegin() < LastDeclRange.getBegin())
+      Head = SourceRange(SR.getBegin(),
+                         LastDeclRange.getBegin().getLocWithOffset(-1));
+    if (SR.getEnd() > LastDeclRange.getEnd())
+      Tail = SourceRange(LastDeclRange.getEnd().getLocWithOffset(1),
+                         SR.getEnd());
+
+    LastDeclRange = SR;
+    return {Head, Tail};
+  }
 
 };
 
@@ -587,6 +626,13 @@ static std::optional<std::pair<std::string, RefEntry> > getDependent(
 }
 #endif
 
+
+
+// TODO:
+//  1. Call the edit functions only when the function pointer is found.
+//  2. Make the SourceRange as small as possible.
+//  3. Handle editing on source case, which may fail when macro is encountered
+//  in SourceRange.
 void DeclScanner::findClassnameInsertions(
     SourceRange SR, SmallVectorImpl<EditLocation> &Edits) const {
   // We need to turn all function pointer to member function pointer,
@@ -596,7 +642,7 @@ void DeclScanner::findClassnameInsertions(
   // return and parameters can also be function pointers.
   //  e.g. The type name may be `int (*(*(*[10])(int))(foo_t (**)(int)))()`
 
-  // FIXME: Not all continuous "(*" are function pointers, e.g. `int x = (*p);`
+  // Attention: Not all continuous "(*" are function pointers, e.g. `int x = (*p);`
   //  We need to exclude the range of expressions. There is no expression in
   //  TypedefDecl, RecordDecl(only for C) and FunctionDecl (only for C,
   //  excluding body).
@@ -604,6 +650,8 @@ void DeclScanner::findClassnameInsertions(
   //  However, we need to handle the explicit cast expression like
   //  `void (*fvp)(int) = (void(*)(int))func1;` in VarDecl initializer and
   //  function body expression.
+  // Caller should provide the correct SourceRange to exclude the
+  // initializer or function body.
   SourceManager &SM = CI->getSourceManager();
   bool LastIsLParen = false;
 
@@ -768,13 +816,13 @@ std::pair<bool/*isCombined*/, SourceRange> DeclScanner::checkCombinedDecls(
     if (const VarDecl *VD = dyn_cast<VarDecl>(&Decl))
       InitExpr = VD->getInit();
 
-    if (InitExpr)
-      // SourceLocation InitBegin = InitExpr->getBeginLoc();
-      // SourceRange VarRange(TailIncrementalRange.getBegin(),
-      //                     InitBegin.getLocWithOffset(-1));
-      // findClassnameInsertions(VarRange, DE.EditLocations);
-      EditVisitor::scanOn(*InitExpr, *this, DE.EditLocations);
-    else
+    if (InitExpr) {
+      SourceLocation InitBegin = InitExpr->getBeginLoc();
+      SourceRange VarRange(TailIncrementalRange.getBegin(),
+                           InitBegin.getLocWithOffset(-1));
+      findClassnameInsertions(VarRange, DE.EditLocations);
+      EditVisitor<>::scanOn(*InitExpr, *this, DE.EditLocations);
+    } else
       findClassnameInsertions(TailIncrementalRange, DE.EditLocations);
   }
 
@@ -961,9 +1009,9 @@ bool DeclScanner::handleBeginSource(CompilerInstance &Compiler) {
   CurrentFile = SM.getMainFileID();
   PPTokens.clear();
 
-  StringRef FileName = SM.getFilename(SM.getLocForStartOfFile(CurrentFile));
-  if (!FileName.ends_with(".i"))
-    return true;
+  // StringRef FileName = SM.getFilename(SM.getLocForStartOfFile(CurrentFile));
+  // if (!FileName.ends_with(".i"))
+  //   return true;
 
   // Is the tokens in source and headers necessary?
   Preprocessor &PP = Compiler.getPreprocessor();
@@ -971,8 +1019,10 @@ bool DeclScanner::handleBeginSource(CompilerInstance &Compiler) {
     SourceLocation Loc = Tok.getLocation();
     FileID FID = CI->getSourceManager().getFileID(Loc);
 
-    if (CurrentFile != FID)
+    if (CurrentFile != FID) {
+      // FIXME: Add an unknown Tok to mark there is something expanded from a macro?
       return;
+    }
 
     if (!PPTokens.empty())
       assert(PPTokens.back().first < Loc);

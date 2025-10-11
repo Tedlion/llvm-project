@@ -163,7 +163,7 @@ struct DeclEntry {
   unsigned IsArray        : 1 = false;
   unsigned IsFunctionPtr  : 1 = false;
   unsigned IsExtern       : 1 = false;
-
+  unsigned EditOnSource   : 1 = true;  // whether the EditLocations are on the source file
 
   using MapType = SmallDenseMap<std::string, RefEntry, 4, StringDenseMapInfo>;
   MapType InfRefs;  // the symbols used in the declaration
