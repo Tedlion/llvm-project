@@ -52,8 +52,6 @@ const Matcher<Decl> FunctionDeclMatcher =
 //     };
 
 
-
-
 static Range getRangeFromAssociated(const CharSourceRange &CSR,
                                     const SourceManager &SM) {
   unsigned Begin = SM.getFileOffset(CSR.getBegin());
@@ -215,18 +213,18 @@ public:
   }
 
 
-  bool TraversePointerType(PointerType *PT) {
+  bool TraversePointerType(PointerType *PT, bool TraverseQualifier) {
     if (hasPointeeIndependent(PT))
       return true;
-    return RecursiveASTVisitor::TraversePointerType(PT);
+    return RecursiveASTVisitor::TraversePointerType(PT, TraverseQualifier);
   }
 
 
-  bool TraversePointerTypeLoc(PointerTypeLoc PTL) {
+  bool TraversePointerTypeLoc(PointerTypeLoc PTL, bool TraverseQualifier) {
     const PointerType *PT = PTL.getTypePtr();
     if (hasPointeeIndependent(PT))
       return true;
-    return RecursiveASTVisitor::TraversePointerTypeLoc(PTL);
+    return RecursiveASTVisitor::TraversePointerTypeLoc(PTL, TraverseQualifier);
   }
 
 
@@ -246,8 +244,8 @@ public:
     if (DC->isFunctionOrMethod())
       return true;
 
-    llvm::errs() << std::format("Record ValueDecl: {} {}\n", VD->getName(),
-                                static_cast<void *>(VD));
+    //llvm::errs() << std::format("Record ValueDecl: {} {}\n", VD->getName(),
+    static_cast<void *>(VD));
     EnclosureVars.insert(VD);
     return true;
   }
@@ -272,12 +270,18 @@ public:
   // }
 
 
-  bool VisitElaboratedType(ElaboratedType *ET) {
-    // llvm::errs() << std::format("Visiting ElaboratedType: {} {}\n",
-    //                         ET->getNamedType().getAsString(),
-    //                         static_cast<void *>(ET));
-    if (const auto *RT = dyn_cast<RecordType>(
-        ET->getNamedType().getTypePtr()))
+  bool VisitTagType(TagType *TT) {
+    ElaboratedTypeKeyword Keyword = TT->getKeyword();
+    if (Keyword != ElaboratedTypeKeyword::Struct &&
+        Keyword != ElaboratedTypeKeyword::Union &&
+        Keyword != ElaboratedTypeKeyword::Class &&
+        Keyword != ElaboratedTypeKeyword::Enum)
+      return true;
+
+    // llvm::errs() << std::format("Visiting TagType: {} {}\n",
+    //                         QualType(TT, 0).getAsString(),
+    //                         static_cast<void *>(TT));
+    if (const auto *RT = dyn_cast<RecordType>(TT))
       if (RecordDecl *RD = RT->getDecl()) {
         if (!RD->getIdentifier())
           return true;
@@ -295,11 +299,22 @@ public:
     //  symbol `S` is unknown in C, only `struct S` is valid.
     //  But in C++, `S` is valid.
     //  Ignore the difference for now, since no occurrences in target codebase.
-    std::string Name = ET->getNamedType().getAsString();
-    if (ET->getKeyword() != ElaboratedTypeKeyword::None)
-      Name = Name.substr(Name.find(' ') + 1);
+    std::string Name = QualType(TT, 0).getAsString();
+    if (TT->getKeyword() != ElaboratedTypeKeyword::None)
+      if (size_t Pos = Name.find(' '); Pos != std::string::npos)
+        Name = Name.substr(Pos + 1);
     //llvm::errs() << "get Type: " << Name << "\n";
     Callback(Name, RefEntry{Decl::Kind::Typedef, Range(0, 0)});
+    return true;
+  }
+
+
+  bool VisitTypedefType(TypedefType *TT) {
+    const TypedefNameDecl *TD = TT->getDecl();
+    if (!TD)
+      return true;
+
+    Callback(TD->getName().str(), RefEntry{TD->getKind(), Range(0, 0)});
     return true;
   }
 
@@ -319,7 +334,7 @@ public:
       Name = VD->getName().str();
     }
 
-    llvm::errs() << "get DeclRef: " << Name << "\n";
+    //llvm::errs() << "get DeclRef: " << Name << "\n";
     Callback(Name, RefEntry{VD->getKind(), Range(0, 0)});
     return true;
   }
@@ -343,7 +358,7 @@ private:
     // For type usage like `typedef struct S * S_t;` or `struct S * p;`,
     // the declaration of `struct S` is not necessary,
     // thus we should early return here.
-    if (const auto *Elaborated = dyn_cast<ElaboratedType>(PointeeType)) {
+    if (const auto *Elaborated = dyn_cast<TagType>(PointeeType)) {
       if (auto Keyword = Elaborated->getKeyword();
         Keyword == ElaboratedTypeKeyword::Struct ||
         Keyword == ElaboratedTypeKeyword::Union ||
@@ -365,6 +380,19 @@ static bool isFunctionPointerType(QualType QT) {
       return true;
   }
   return false;
+}
+
+
+static void normalizeEditOffsets(SmallVectorImpl<EditLocation> &Edits,
+                                 Range BaseRange) {
+  if (BaseRange.getOffset() == DeclEntry::InvalidOffset)
+    return;
+
+  for (EditLocation &Edit: Edits) {
+    assert(Edit.getOffset() >= BaseRange.getOffset());
+    Edit = EditLocation(Edit.getEditKind(),
+                        Edit.getOffset() - BaseRange.getOffset());
+  }
 }
 
 
@@ -551,16 +579,24 @@ void DeclScanner::fillDeclEntry(DeclEntry &DE,
                                 const RecordDecl &RD) {
   assert(DE.Name == RD.getName().str());
 
-  if (!DE.IsDefinition)
+  if (!DE.IsDefinition) {
+    DE.AddToClass = {0, 0};
     return;
+  }
 
   if (!DE.IsUnnamed) {
     SourceManager &SM = CI->getSourceManager();
     DE.NameOffset = SM.getFileOffset(RD.getLocation());
   }
+
+  const SourceManager &SM = *Result.SourceManager;
+  DE.AddToClass = getRangeFromAssociated(
+    getExpansionAssociatedRange(RD, *Result.Context), SM);
   SourceRange RangeWithAttrs = getRangeWithAttributes(RD);
-  DE.AddToClass = getRangeFromSourceRange(RangeWithAttrs);
   DE.ImplHash = getTokenHash(RangeWithAttrs);
+  EditVisitor<>::scanOn(RD, *this, DE.EditLocations);
+  llvm::sort(DE.EditLocations);
+  normalizeEditOffsets(DE.EditLocations, DE.AddToClass);
 }
 
 
@@ -593,8 +629,8 @@ static std::optional<std::pair<std::string, RefEntry> > getDependent(
     // For type usage like `typedef struct S * S_t;` or `struct S * p;`,
     // the declaration of `struct S` is not necessary,
     // thus we should return nullopt when the Pointee is a direct RecordType.
-    if (const auto *Elaborated = dyn_cast<ElaboratedType>(PointeeType)) {
-      auto Keyword = Elaborated->getKeyword();
+    if (const auto *Tag = dyn_cast<TagType>(PointeeType)) {
+      auto Keyword = Tag->getKeyword();
       if (Keyword == ElaboratedTypeKeyword::Struct ||
           Keyword == ElaboratedTypeKeyword::Union ||
           Keyword == ElaboratedTypeKeyword::Class)
@@ -614,11 +650,14 @@ static std::optional<std::pair<std::string, RefEntry> > getDependent(
     return getDependent(ElementTypePtr);
   }
 
-  if (const auto *Elaborated = dyn_cast<ElaboratedType>(T)) {
-    llvm::errs() << "ElaboratedType: " << Elaborated->getNamedType().
-        getAsString() << "\n";
+  if (const auto *Tag = dyn_cast<TagType>(T)) {
+    std::string Name = QualType(Tag, 0).getAsString();
+    if (Tag->getKeyword() != ElaboratedTypeKeyword::None)
+      if (size_t Pos = Name.find(' '); Pos != std::string::npos)
+        Name = Name.substr(Pos + 1);
+    llvm::errs() << "TagType: " << Name << "\n";
     return std::make_pair(
-        Elaborated->getNamedType().getAsString(),
+      Name,
         RefEntry{Decl::Kind::Typedef, Range(0, 0)});
   }
 
@@ -742,13 +781,9 @@ std::optional<DeclEntry> DeclScanner::getDeclEntry(
   // we check that with Range and the RecordID.
   QualType UnderlyingType = TD.getUnderlyingType();
   QualType RemoveArrayType = removeArray(UnderlyingType);
-  if (const ElaboratedType *Elaborated = dyn_cast<ElaboratedType>(
-      RemoveArrayType.getTypePtr())) {
-    const Type *ReferTo = Elaborated->getNamedType().getTypePtr();
-    if (const RecordType *RT = dyn_cast<RecordType>(ReferTo))
-      DE.DeclID = RT->getDecl();
-    else if (const EnumType *ET = dyn_cast<EnumType>(ReferTo))
-      DE.DeclID = ET->getDecl();
+  if (const TagType *Tag = dyn_cast<TagType>(
+    RemoveArrayType.getTypePtr())) {
+    DE.DeclID = Tag->getDecl();
   }
 
   DE.ToRemove = getRangeFromAssociated(AssociatedRange, SM);
@@ -783,6 +818,9 @@ std::pair<bool/*isCombined*/, SourceRange> DeclScanner::checkCombinedDecls(
   SourceRange SourceRangeWithAttrs = getRangeWithAttributes(Decl);
   DeclEntry *PrevDE = getPrevDeclEntry(&DE);
   if (!PrevDE)
+    return {false, SourceRangeWithAttrs};
+
+  if (PrevDE->Kind == Decl::Kind::Record)
     return {false, SourceRangeWithAttrs};
 
   Range RangeWithAttrs = getRangeFromSourceRange(SourceRangeWithAttrs);
@@ -850,17 +888,19 @@ void DeclScanner::fillDeclEntry(DeclEntry &DE,
           DE.ImplRefs.try_emplace(Name, Ref);
       });
 
-  // const SourceManager &SM = *Result.SourceManager;
+  const SourceManager &SM = *Result.SourceManager;
   auto [Combined, RangeWithAttrs] = checkCombinedDecls(TD, DE);
   if (!Combined) {
-    DE.AddToClass = getRangeFromSourceRange(RangeWithAttrs);
+    DE.AddToClass = getRangeFromAssociated(
+      getExpansionAssociatedRange(TD, *Result.Context), SM);
     DE.ImplHash = getTokenHash(RangeWithAttrs);
   }
 
-  // findClassnameInsertions(RangeWithAttrs, DE.EditLocations);
+  findClassnameInsertions(RangeWithAttrs, DE.EditLocations);
   llvm::sort(DE.EditLocations);
-  SourceManager &SM = CI->getSourceManager();
-  DE.NameOffset = SM.getFileOffset(TD.getLocation());
+  normalizeEditOffsets(DE.EditLocations, DE.AddToClass);
+  SourceManager &CISM = CI->getSourceManager();
+  DE.NameOffset = CISM.getFileOffset(TD.getLocation());
 
   // if (DE.DeclID) {
   //   DeclEntry *ReferTo = findRefDecl(DE.DeclID);
@@ -964,15 +1004,15 @@ void DeclScanner::fillDeclEntry(DeclEntry &DE,
   QualType VarType = VD.getType();
   std::string TypeName = VarType.getAsString();
   if (VD.hasInit()) {
-    std::string InitText;
-    raw_string_ostream OS(InitText);
-    VD.getInit()->dump(OS, *Result.Context);
+    std::string InitText = tooling::getText(
+      CharSourceRange::getTokenRange(VD.getInit()->getSourceRange()),
+      *Result.Context).str();
     DE.AddToClassText = std::format("{} {} = {};\n", TypeName, DE.Name,
                                     InitText);
   } else {
     DE.AddToClassText = std::format("{} {};\n", TypeName, DE.Name);
   }
-  llvm::errs() << DE.AddToClassText;
+  //llvm::errs() << DE.AddToClassText;
 
   // const SourceManager &SM = *Result.SourceManager;
   // CharSourceRange AssociatedRange = getExpansionAssociatedRange(

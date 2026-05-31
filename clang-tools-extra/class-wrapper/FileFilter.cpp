@@ -10,6 +10,18 @@ std::string pathNormalize(const std::string &Path) {
   return std::filesystem::path(Path).lexically_normal().generic_string();
 }
 
+Expected<OwnedGlobPattern> OwnedGlobPattern::create(StringRef PatternText) {
+  auto PatternStorage = std::make_unique<char[]>(PatternText.size());
+  std::copy_n(PatternText.data(), PatternText.size(), PatternStorage.get());
+
+  auto Pattern = GlobPattern::create(
+    StringRef(PatternStorage.get(), PatternText.size()));
+  if (!Pattern)
+    return Pattern.takeError();
+
+  return OwnedGlobPattern(std::move(PatternStorage), std::move(*Pattern));
+}
+
 
 FileFilter::FileFilter(std::vector<std::string>::const_iterator RuleBegin,
                        std::vector<std::string>::const_iterator RuleEnd,
@@ -17,9 +29,10 @@ FileFilter::FileFilter(std::vector<std::string>::const_iterator RuleBegin,
   using std_path = std::filesystem::path;
   auto SrcRootPath = std_path(SrcRoot.str());
   if (RuleBegin == RuleEnd) {
-    auto Pattern = GlobPattern::create((SrcRootPath / "*").string());
+    std::string PatternText = (SrcRootPath / "*").lexically_normal().generic_string();
+    auto Pattern = OwnedGlobPattern::create(PatternText);
     if (Pattern) {
-      FilePathPatterns.push_back(std::make_pair(Inclusive, Pattern.get()));
+      FilePathPatterns.emplace_back(Inclusive, std::move(*Pattern));
     } else {
       llvm::errs() << "Invalid pattern: " << (SrcRootPath / "*").
           lexically_normal().generic_string() << "\n";
@@ -44,9 +57,9 @@ FileFilter::FileFilter(std::vector<std::string>::const_iterator RuleBegin,
                             generic_string()
                             : (SrcRootPath / Path.str()).lexically_normal().
                             generic_string();
-    auto Pattern = GlobPattern::create(PathStr);
+    auto Pattern = OwnedGlobPattern::create(PathStr);
     if (Pattern) {
-      FilePathPatterns.push_back(std::make_pair(Type, Pattern.get()));
+      FilePathPatterns.emplace_back(Type, std::move(*Pattern));
     } else {
       llvm::errs() << "Invalid pattern: " << PathStr << "\n";
     }
@@ -55,16 +68,16 @@ FileFilter::FileFilter(std::vector<std::string>::const_iterator RuleBegin,
 
 bool FileFilter::isMatched(llvm::StringRef Path) const {
   bool IsMatched = false;
-  for (const auto &[matchType, pattern] : FilePathPatterns) {
-    if (IsMatched && matchType == Inclusive) {
+  for (const auto &[MatchType, Pattern]: FilePathPatterns) {
+    if (IsMatched && MatchType == Inclusive) {
       continue;
     }
-    if (!IsMatched && matchType == Exclusive) {
+    if (!IsMatched && MatchType == Exclusive) {
       continue;
     }
     auto NormalPath = pathNormalize(Path.str());
 
-    if (pattern.match(NormalPath)){
+    if (Pattern.match(NormalPath)) {
       IsMatched = !IsMatched;
     }
   }

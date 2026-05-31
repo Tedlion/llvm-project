@@ -10,11 +10,35 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/GlobPattern.h"
 
+#include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
 namespace llvm {
 extern std::string pathNormalize(const std::string &Path);
+
+class OwnedGlobPattern {
+public:
+  OwnedGlobPattern(OwnedGlobPattern &&) = default;
+  OwnedGlobPattern &operator=(OwnedGlobPattern &&) = default;
+  OwnedGlobPattern(const OwnedGlobPattern &) = delete;
+  OwnedGlobPattern &operator=(const OwnedGlobPattern &) = delete;
+
+  bool match(StringRef Path) const { return Pattern.match(Path); }
+
+  static Expected<OwnedGlobPattern> create(StringRef PatternText);
+
+private:
+  std::unique_ptr<char[]> PatternStorage;
+  GlobPattern Pattern;
+
+
+  OwnedGlobPattern(std::unique_ptr<char[]> PatternStorage, GlobPattern Pattern)
+    : PatternStorage(std::move(PatternStorage)),
+      Pattern(std::move(Pattern)) {
+  }
+};
 
 class FileFilter {
 public:
@@ -30,9 +54,7 @@ private:
     Exclusive,
   };
 
-  // FIXME: FilePathPatterns has a StringRef member and brings lifetime issue?
-  std::vector<std::pair<MatchType, GlobPattern>> FilePathPatterns;
-
+  std::vector<std::pair<MatchType, OwnedGlobPattern> > FilePathPatterns;
 };
 
 } // namespace llvm
